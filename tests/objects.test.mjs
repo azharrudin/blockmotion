@@ -54,7 +54,7 @@ state().previewObjectPose({ position: [-2, 1, -4], rotation: [0, 45, 0], scale: 
 assert.deepEqual(state().project, beforeDrag, 'drag preview is not persisted');
 assert.equal(state().past.length, pastCount);
 state().commitObjectPose();
-assert.equal(state().past.length, pastCount + 1, 'one undo entry per drag');
+assert.equal(state().past.length, Math.min(50, pastCount + 1), 'one undo entry per drag within the history limit');
 const edited = structuredClone(state().project);
 state().undo();
 assert.deepEqual(state().project, beforeDrag);

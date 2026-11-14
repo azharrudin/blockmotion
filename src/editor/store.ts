@@ -2,11 +2,13 @@ import { create } from 'zustand';
 import { createProject, createPreset, type PresetName } from './presets';
 import { isValidSky, SKY_PRESETS } from './sky';
 import { ASSET_CATALOG, MAX_OBJECTS, createSceneObject, isValidObjectPose, isValidSceneObject } from './assets';
-import { BONE_IDS, JOINT_IDS, clonePose, keyId, neutralPose, roundFrame, type AssetKind, type JointId, type Keyframe, type Palette, type Pose, type Project, type SceneObject, type SkyPreset, type SkySettings, type Tool, type Tracks } from './types';
+import { BONE_IDS, JOINT_IDS, clonePose, keyId, neutralPose, roundFrame, type AssetKind, type CameraCut, type CameraCutView, type JointId, type Keyframe, type Palette, type Pose, type Project, type SceneObject, type SkyPreset, type SkySettings, type Tool, type Tracks } from './types';
 import { isCharacter, jointNodeId, resolveObjectNode } from './characters';
 import { getTrack, nodeDefaultPose, replaceTrack, sampleNodePose, sortProjectTracks, timelineTracks } from './tracks';
 
 import { GRID_SIZES } from './town';
+import { createEnvironmentPlan, materializeEnvironment, GENERATOR_LABELS, type GeneratorOptions } from './generators';
+import { CAMERA_CUT_LABELS, isValidCameraCuts, type CameraSnapshot } from './cameraCuts';
 import { writePoseKey } from './keyframes';
 
 export type ClearKeyScope = 'node' | 'character' | 'project';
@@ -19,6 +21,7 @@ export function isValidProject(v: unknown): v is Project {
   if (typeof v.duration !== 'number' || !Number.isFinite(v.duration) || v.duration < 0.5 || v.duration > 600) return false;
   if (typeof v.fps !== 'number' || v.fps < 1 || v.fps > 120) return false;
   if (!['smooth','linear','step'].includes(String(v.interpolation))) return false;
+  if (v.cameraCuts !== undefined && !isValidCameraCuts(v.cameraCuts, v.duration as number)) return false;
   if (v.sky !== undefined && !isValidSky(v.sky)) return false;
   if (v.objects !== undefined) {
     if (!Array.isArray(v.objects) || v.objects.length > MAX_OBJECTS + (v.sceneVersion === 2 ? 1 : 0) || !v.objects.every(o => isValidSceneObject(o, v.duration as number))) return false;
@@ -63,6 +66,7 @@ type State = {
   selectedJoint: JointId | null;
   objectPreview: Pose | null;
   selectedKey: SelectedKey;
+  selectedCut: string | null;
   time: number;
   playing: boolean;
   looping: boolean;
@@ -78,6 +82,7 @@ type State = {
   select: (id: string) => void;
   selectObject: (id: string, joint?: JointId) => void;
   addObject: (kind: AssetKind) => void;
+  generateEnvironment: (options: GeneratorOptions) => string[];
   updateObject: (id: string, data: Partial<Pick<SceneObject, 'name' | 'color' | 'skinColor' | 'pantsColor'>>) => void;
   previewObjectPose: (pose: Pose) => void;
   commitObjectPose: () => void;
@@ -93,6 +98,12 @@ type State = {
   setGridSnap: (value: boolean) => void;
   setGridSize: (value: number) => void;
   setCameraPreview: (value: boolean) => void;
+  addCameraCut: (view: CameraCutView, snapshot?: CameraSnapshot) => void;
+  selectCameraCut: (id: string) => void;
+  moveCameraCut: (id: string, time: number) => void;
+  recaptureCameraCut: (id: string, snapshot: CameraSnapshot) => void;
+  deleteCameraCut: (id?: string) => void;
+  clearCameraCuts: () => void;
   updatePose: (id: string, value: Pose) => void;
   commitKey: (id?: string) => void;
   deleteKey: () => void;
@@ -117,15 +128,15 @@ function selectionPatch(state: Pick<State, 'project' | 'overrides'>, id: string)
   const node = resolveObjectNode(state.project, id);
   if (id !== 'camera' && !node) return {};
   return { selection: id, selectedObject: node?.object.id ?? null, selectedJoint: node?.joint ?? null,
-    objectPreview: node ? state.overrides[id] ?? null : null, selectedKey: null };
+    objectPreview: node ? state.overrides[id] ?? null : null, selectedKey: null, selectedCut: null };
 }
 function snapshot(state: State, project: Project): Partial<State> {
-  return { project, past: [...state.past.slice(-49), state.project], future: [], selectedKey: null };
+  return { project, past: [...state.past.slice(-49), state.project], future: [], selectedKey: null, selectedCut: null };
 }
 const initial = initialProject();
 export const useEditor = create<State>((set, get) => ({
   project: initial, selection: initial.objects?.[0]?.id ?? 'camera', selectedObject: initial.objects?.[0]?.id ?? null,
-  selectedJoint: null, objectPreview: null, selectedKey: null, time: 0,
+  selectedJoint: null, objectPreview: null, selectedKey: null, selectedCut: null, time: 0,
   playing: false, looping: true, autoKey: true, tool: 'rotate', gridSnap: false, gridSize: 1, cameraPreview: false,
   overrides: {}, past: [], future: [], notification: '',
   select: id => set(s => selectionPatch(s, id)),
@@ -138,6 +149,26 @@ export const useEditor = create<State>((set, get) => ({
     return { ...snapshot(s, { ...s.project, objects: [...objects, object] }), selection: object.id,
       selectedObject: object.id, selectedJoint: null, objectPreview: null, tool: 'translate', cameraPreview: false, notification: `${object.name} added` };
   }),
+  generateEnvironment: options => {
+    const state = get();
+    try {
+      const plan = createEnvironmentPlan(options);
+      const existing = options.mode === 'replace' ? [] : state.project.objects ?? [];
+      if (existing.length + plan.objects.length > MAX_OBJECTS) {
+        set({ notification: `Generation needs ${plan.objects.length} objects; ${MAX_OBJECTS - existing.length} slots available. Reduce the settings or replace scene objects.` });
+        return [];
+      }
+      const objects = materializeEnvironment(plan, options.kind);
+      const project = { ...state.project, objects: [...existing, ...objects] };
+      set({ ...snapshot(state, project), ...selectionPatch({ ...state, project }, objects[0].id),
+        playing: false, cameraPreview: false, time: 0, ...clearedEdits,
+        notification: `${GENERATOR_LABELS[options.kind]} generated: ${objects.length} objects — undo to restore` });
+      return objects.map(o => o.id);
+    } catch (error) {
+      set({ notification: error instanceof Error ? error.message : 'Unable to generate environment' });
+      return [];
+    }
+  },
   updateObject: (id, data) => set(s => {
     const original = s.project.objects?.find(o => o.id === id);
     if (!original) return s;
@@ -147,7 +178,7 @@ export const useEditor = create<State>((set, get) => ({
   }),
   updatePose: (id, value) => set(s => {
     if ((id !== 'camera' && !resolveObjectNode(s.project, id)) || !isValidObjectPose(value)) return s;
-    return { overrides: { ...s.overrides, [id]: clonePose(value) }, playing: false,
+    return { overrides: { ...s.overrides, [id]: clonePose(value) }, playing: false, selectedCut: null,
       ...(s.selectedObject && s.selection === id ? { objectPreview: clonePose(value) } : {}) };
   }),
   previewObjectPose: pose => { if (get().selectedObject) get().updatePose(get().selection, pose); },
@@ -183,7 +214,7 @@ export const useEditor = create<State>((set, get) => ({
     if (!getTrack(s.project, selectedKey.node).some(k => k.id === selectedKey.id)) return s;
     return { ...selectionPatch(s, selectedKey.node), selectedKey };
   }),
-  seek: time => set(s => Number.isFinite(time) ? { time: Math.max(0, Math.min(s.project.duration, time)), playing: false, selectedKey: null, ...clearedEdits } : s),
+  seek: time => set(s => Number.isFinite(time) ? { time: Math.max(0, Math.min(s.project.duration, time)), playing: false, selectedKey: null, selectedCut: null, ...clearedEdits } : s),
   tick: delta => set(s => {
     if (!s.playing || !Number.isFinite(delta)) return s;
     const next = s.time + Math.max(0, delta);
@@ -192,11 +223,59 @@ export const useEditor = create<State>((set, get) => ({
       : { time: s.project.duration, playing: false, ...clearedEdits };
     return { time: next, ...clearedEdits };
   }),
-  play: playing => set(s => ({ playing: playing ?? !s.playing, time: s.time >= s.project.duration ? 0 : s.time, ...clearedEdits })),
+  play: playing => set(s => ({ playing: playing ?? !s.playing, selectedCut: null, time: s.time >= s.project.duration ? 0 : s.time, ...clearedEdits })),
   setLooping: looping => set({ looping }), setAutoKey: autoKey => set({ autoKey }),
   setGridSnap: gridSnap => set({ gridSnap }),
   setGridSize: gridSize => { if ((GRID_SIZES as readonly number[]).includes(gridSize)) set({ gridSize }); },
   setTool: tool => set({ tool }), setCameraPreview: cameraPreview => set({ cameraPreview }),
+  addCameraCut: (view, captured) => set(s => {
+    if (view !== 'shot' && (!captured || !isValidObjectPose(captured.pose))) return { notification: 'Capture a valid camera view first' };
+    const time = Math.min(s.project.duration, roundFrame(s.time, s.project.fps));
+    const cuts = [...s.project.cameraCuts ?? []];
+    const index = cuts.findIndex(c => Math.abs(c.time - time) < 0.5 / s.project.fps);
+    if (index < 0 && cuts.length >= 500) return { notification: 'Maximum 500 camera cuts' };
+    const cut: CameraCut = { id: index >= 0 ? cuts[index].id : `cut_${keyId()}`, time, view,
+      ...(view !== 'shot' && captured ? { pose: clonePose(captured.pose), fov: captured.fov } : {}) };
+    if (!isValidCameraCuts([cut], s.project.duration)) return { notification: 'Choose a valid camera view before adding a cut' };
+    if (index >= 0) cuts[index] = cut; else cuts.push(cut);
+    cuts.sort((a,b) => a.time - b.time);
+    const changed = JSON.stringify(cuts) !== JSON.stringify(s.project.cameraCuts ?? []);
+    return { ...(changed ? snapshot(s, { ...s.project, cameraCuts: cuts }) : {}), selectedCut: cut.id, selectedKey: null,
+      cameraPreview: true, notification: `${CAMERA_CUT_LABELS[view]} cut at ${time.toFixed(2)}s` };
+  }),
+  selectCameraCut: id => set(s => {
+    const cut = s.project.cameraCuts?.find(c => c.id === id);
+    return cut ? { selectedCut: id, selectedKey: null, time: cut.time, playing: false, cameraPreview: true, ...clearedEdits } : s;
+  }),
+  moveCameraCut: (id, time) => set(s => {
+    if (!Number.isFinite(time)) return s;
+    const cut = s.project.cameraCuts?.find(c => c.id === id);
+    if (!cut) return s;
+    const next = Math.min(s.project.duration, roundFrame(Math.max(0, Math.min(s.project.duration, time)), s.project.fps));
+    if (next === cut.time) return s;
+    const cuts = s.project.cameraCuts!.filter(c => c.id !== id && Math.abs(c.time - next) >= 0.5 / s.project.fps);
+    cuts.push({ ...cut, time: next }); cuts.sort((a,b) => a.time - b.time);
+    return { ...snapshot(s, { ...s.project, cameraCuts: cuts }), selectedCut: id, time: next, playing: false, cameraPreview: true, ...clearedEdits };
+  }),
+  recaptureCameraCut: (id, captured) => set(s => {
+    if (!captured || !isValidObjectPose(captured.pose)) return s;
+    const cut = s.project.cameraCuts?.find(c => c.id === id);
+    if (!cut) return s;
+    const next: CameraCut = { ...cut, view: 'current', pose: clonePose(captured.pose), fov: captured.fov };
+    if (!isValidCameraCuts([next], s.project.duration)) return s;
+    if (JSON.stringify(next) === JSON.stringify(cut)) return s;
+    return { ...snapshot(s, { ...s.project, cameraCuts: s.project.cameraCuts!.map(c => c.id === id ? next : c) }), selectedCut: id,
+      notification: 'Cut updated from the current view — undo to restore' };
+  }),
+  deleteCameraCut: id => set(s => {
+    const target = id ?? s.selectedCut;
+    if (!s.project.cameraCuts?.some(c => c.id === target)) return s;
+    return { ...snapshot(s, { ...s.project, cameraCuts: s.project.cameraCuts.filter(c => c.id !== target) }), selectedCut: null,
+      notification: 'Camera cut deleted — undo to restore' };
+  }),
+  clearCameraCuts: () => set(s => s.project.cameraCuts?.length ? {
+    ...snapshot(s, { ...s.project, cameraCuts: [] }), selectedCut: null, notification: 'Camera cuts cleared — undo to restore',
+  } : s),
   commitKey: id => set(s => {
     const node = id ?? s.selection;
     if (node !== 'camera' && !resolveObjectNode(s.project, node)) return s;
@@ -205,7 +284,7 @@ export const useEditor = create<State>((set, get) => ({
     const result = writePoseKey(s.project, node, value, s.time);
     if (!result) return { notification: 'Maximum 5000 keyframes per track' };
     const edits = { overrides: { ...s.overrides, [node]: undefined }, ...(node === s.selection ? { objectPreview: null } : {}) };
-    return { ...(result.project !== s.project ? snapshot(s, result.project) : {}), selectedKey: { node, id: result.frame.id }, ...edits };
+    return { ...(result.project !== s.project ? snapshot(s, result.project) : {}), selectedKey: { node, id: result.frame.id }, selectedCut: null, ...edits };
   }),
   deleteKey: () => set(s => {
     if (!s.selectedKey) return s;
@@ -230,12 +309,12 @@ export const useEditor = create<State>((set, get) => ({
     const ids = scope === 'project' ? timelineTracks(s.project).map(t => t.id)
       : scope === 'character' ? [owner!.id, ...JOINT_IDS.map(j => jointNodeId(owner!.id, j))] : [s.selection];
     const targets = new Set(ids);
-    const count = ids.reduce((n, id) => n + getTrack(s.project, id).length, 0);
-    let project = s.project;
+    const count = ids.reduce((n, id) => n + getTrack(s.project, id).length, 0) + (scope === 'project' ? s.project.cameraCuts?.length ?? 0 : 0);
+    let project = scope === 'project' && s.project.cameraCuts?.length ? { ...s.project, cameraCuts: [] } : s.project;
     for (const id of ids) if (getTrack(project, id).length) project = replaceTrack(project, id, []);
     const overrides = Object.fromEntries(Object.entries(s.overrides).filter(([id]) => !targets.has(id)));
     return { ...(project !== s.project ? snapshot(s, project) : {}), overrides, selectedKey: null,
-      objectPreview: targets.has(s.selection) ? null : s.objectPreview, playing: false,
+      objectPreview: targets.has(s.selection) ? null : s.objectPreview, selectedCut: null, playing: false,
       ...(scope === 'project' ? { time: 0 } : {}),
       notification: count ? `Cleared ${count} keyframes (${scope}) — undo to restore` : 'No keyframes to clear' };
   }),
@@ -246,7 +325,7 @@ export const useEditor = create<State>((set, get) => ({
     if (!s.autoKey) {
       const overrides = { ...s.overrides };
       for (const id of ids) overrides[id] = neutralPose();
-      return { overrides, selectedKey: null, playing: false,
+      return { overrides, selectedKey: null, selectedCut: null, playing: false,
         objectPreview: s.selectedJoint ? overrides[s.selection] : s.objectPreview,
         notification: 'Neutral pose preview — use Key pose to record it' };
     }
@@ -257,15 +336,15 @@ export const useEditor = create<State>((set, get) => ({
       project = result.project;
     }
     const overrides = Object.fromEntries(Object.entries(s.overrides).filter(([id]) => !ids.includes(id)));
-    return { ...(project !== s.project ? snapshot(s, project) : {}), overrides, selectedKey: null, playing: false,
+    return { ...(project !== s.project ? snapshot(s, project) : {}), overrides, selectedKey: null, selectedCut: null, playing: false,
       objectPreview: s.selectedJoint ? null : s.objectPreview, notification: 'Character pose reset at the playhead — undo to restore' };
   }),
   deleteAll: () => set(s => {
-    const hasContent = (s.project.objects?.length ?? 0) > 0 || BONE_IDS.some(id => s.project.tracks[id].length > 0);
-    const project: Project = { ...s.project, sceneVersion: 2, objects: [],
+    const hasContent = (s.project.objects?.length ?? 0) > 0 || BONE_IDS.some(id => s.project.tracks[id].length > 0) || !!s.project.cameraCuts?.length;
+    const project: Project = { ...s.project, sceneVersion: 2, objects: [], cameraCuts: [],
       tracks: Object.fromEntries(BONE_IDS.map(id => [id, [] as Keyframe[]])) as Tracks };
     return { ...(hasContent ? snapshot(s, project) : {}), selection: 'camera', selectedObject: null, selectedJoint: null,
-      selectedKey: null, time: 0, playing: false, cameraPreview: false, ...clearedEdits,
+      selectedKey: null, selectedCut: null, time: 0, playing: false, cameraPreview: false, ...clearedEdits,
       notification: hasContent ? 'All objects and keyframes deleted — undo to restore' : 'Scene is already empty' };
   }),
   moveKey: (node, id, time) => set(s => {
@@ -284,7 +363,8 @@ export const useEditor = create<State>((set, get) => ({
     const tracks = data.duration === undefined ? s.project.tracks : Object.fromEntries(BONE_IDS.map(id => [id, trim(s.project.tracks[id])])) as Tracks;
     const objects = data.duration === undefined ? s.project.objects : s.project.objects?.map(o => ({ ...o,
       ...(o.keyframes && { keyframes: trim(o.keyframes) }), ...(o.joints && { joints: Object.fromEntries(Object.entries(o.joints).map(([id, keys]) => [id, trim(keys)])) }) }));
-    return { ...snapshot(s, { ...s.project, ...data, tracks, objects }), time: Math.min(s.time, duration), ...clearedEdits };
+    const cameraCuts = s.project.cameraCuts?.filter(c => c.time <= duration);
+    return { ...snapshot(s, { ...s.project, ...data, tracks, objects, ...(cameraCuts && { cameraCuts }) }), time: Math.min(s.time, duration), ...clearedEdits };
   }),
   updatePalette: (id, color) => set(s => snapshot(s, { ...s.project, palette: { ...s.project.palette, [id]: color } })),
   setSkyPreset: preset => set(s => snapshot(s, { ...s.project, sky: preset === 'custom'

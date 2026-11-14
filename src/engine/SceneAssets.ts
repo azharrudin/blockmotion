@@ -3,10 +3,19 @@ import type { SceneObject, Vec3 } from '../editor/types';
 import { isCharacter } from '../editor/characters';
 import { buildTownAsset } from './TownAssets';
 import { isTownAssetKind } from '../editor/town';
+import { buildTerrain, buildVegetation, buildRoadNetwork } from './EnvironmentAssets';
+import { batchAssetMeshes } from './batchAssets';
 import { buildCharacterAsset } from './CharacterAsset';
 
 /** Every preset is one selectable group, with its own disposable geometry/materials. */
 export function buildSceneAsset(object: SceneObject): THREE.Group {
+  const root=buildUnbatchedSceneAsset(object);
+  return isCharacter(object)?root:batchAssetMeshes(root);
+}
+function buildUnbatchedSceneAsset(object: SceneObject): THREE.Group {
+  if (object.kind === 'terrain') return buildTerrain(object);
+  if (object.kind === 'roadNetwork') return buildRoadNetwork(object);
+  if (['jungleTree','palm','cactus'].includes(object.kind)) return buildVegetation(object);
   if (isCharacter(object)) return buildCharacterAsset(object);
   if (isTownAssetKind(object.kind)) return buildTownAsset(object);
   const group = new THREE.Group();

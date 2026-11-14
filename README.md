@@ -25,7 +25,7 @@ The `dist/` directory can be published as a static site (Netlify, Vercel, GitHub
 - A Three.js WebGL viewport with grid, shadows, orbit controls, raycaster-based click selection, transform gizmos, and front/side/top views.
 - Procedural R6 male and female characters, each a removable scene node with independent joints: torso, head, two arms, two legs, facial details, editable palette and hierarchical joint pivots.
 - Scene Explorer and transform Inspector (position, Euler rotation in degrees, scale).
-- Object library with 46 procedural presets, including: Blocky R6 Male/Female, tree, pine tree, bush, rock, road, intersection, store, house, bench, street light, fence, cube, sphere, cylinder, and ground tile. Add up to 100 objects from **Explorer → Add object / Presets**. Select objects in the viewport, hierarchy, or timeline, then move/rotate/scale, rename, recolor, focus, duplicate, or delete them in **Inspector → Object**. Press **K** or **Insert keyframe** to record a transform at the playhead; Auto key records Inspector edits on blur and gizmo edits after dragging. Scrubbing and playback interpolate object tracks with the selected linear, smooth, or step setting. Duplicating an object copies its animation with a position offset. Added objects are automatically framed in the viewport. Changes support undo/redo, autosave and project JSON import/export.
+- Object library with 51 procedural presets, including: Blocky R6 Male/Female, tree, pine tree, bush, rock, road, intersection, store, house, bench, street light, fence, cube, sphere, cylinder, and ground tile. Add up to 500 objects from **Explorer → Add object / Presets**. Select objects in the viewport, hierarchy, or timeline, then move/rotate/scale, rename, recolor, focus, duplicate, or delete them in **Inspector → Object**. Press **K** or **Insert keyframe** to record a transform at the playhead; Auto key records Inspector edits on blur and gizmo edits after dragging. Scrubbing and playback interpolate object tracks with the selected linear, smooth, or step setting. Duplicating an object copies its animation with a position offset. Added objects are automatically framed in the viewport. Changes support undo/redo, autosave and project JSON import/export.
 - A multi-track animation timeline with draggable scrubber, selectable and draggable keyframe diamonds, frame stepping, FPS, looping, automatic keyframes, and linear / smooth / step interpolation.
 - Preset motions: Wave, Walk, Jump, Idle, Cinematic.
 - Editable cinematic camera with its own timeline track; viewport/camera toggle.
@@ -86,3 +86,25 @@ The 29 new Town presets are road bend, T junction, sidewalk, sidewalk corner, ze
 - Road segments are 6 units long with a 4-unit carriageway. A road bend connects its north edge to its east edge; the T junction connects north, east, and west. Rotate modules in 90° increments using Inspector.
 - **Snap** in the viewport applies to object/camera position edits through the Move gizmo and Inspector. Choose **6 u** to align road centers, or **0.5 u** to position a sidewalk center 2.5 units from a straight road center. Other available steps are **1 u** and **2 u**. Snap stays off for individual character joints.
 - All presets support transforms, primary colors, keyframes, duplication, deletion, undo/redo, and project JSON persistence. Vehicle movement can be keyframed as a whole object; traffic lights, fountain water and playground parts are static geometry inside their object, with no built-in simulation or separate part animation.
+
+## Environment generators
+
+Open **Explorer → Environment generator** to create **Town**, **City**, **Mountains**, **Jungle**, or **Desert**:
+
+- Town/City: configure **Blocks X/Z** (1–8 each), **Buildings per block** (1–3), trees/greenery, and street props. Town favors houses and shops; City favors taller apartments and offices. Connected streets and sidewalks form a single efficient road-network node; buildings and greenery remain separate objects.
+- Mountains/Jungle/Desert: configure **Area size**, **Terrain/Mountain height**, **Trees** (cacti/palms for Desert), and **Rocks**. Mountains use ridged terrain with mostly pines; Jungle uses rolling terrain, tall trees, palms and undergrowth; Desert uses dunes, cacti, palms and rocks. Plants and rocks sit on the rendered terrain surface.
+- Use **Seed** to repeat the layout or the dice button to get a new layout. **Origin X/Z** offsets the generated environment.
+- **Add to scene** preserves existing objects; **Replace scene objects** replaces them while keeping project settings and camera animation. The panel previews exact object counts and disables generation over the 500-object limit. A generation is atomic and can be undone/redone in one step.
+- Generation automatically frames its result. **Frame result** frames it again. Scene zoom/fog distances expand for large environments.
+- Generated objects support transforms, colors, keyframes, duplication, deletion, JSON import/export and autosave. Terrain and road-grid descriptors are stored in the project, so their geometry is rebuilt on reload without external assets.
+
+## Automatic camera cuts
+
+Use **Timeline → Camera cuts** to switch views automatically during playback:
+
+1. Move the playhead to the desired time. Choose **Current view**, **Front/Back/Left/Right/Top/Perspective**, or **Shot Camera**, then click **Cut here**.
+2. Add more cuts at other times. **Current view** captures the currently displayed camera. Direction presets capture a fixed view framing the selected object's root, or the whole scene if no object is selected. **Shot Camera** uses the animated camera track continuously.
+3. Turn on **Preview cuts** (also available through **Camera view / C**) and press **Play**. At a cut's exact frame the view changes immediately; before the first cut it uses Shot Camera. Scrubbing, looping, PNG export and WebM recording use the same cut selection.
+4. Drag camera icons in the **Camera cuts** timeline row to retime them. Click one to select it and edit its time. **Capture view** updates the selected cut from the displayed camera; leave Camera view and orbit the editor first to capture a new angle. Delete with the selected-cut trash button or **Delete/Backspace**. The toolbar trash button clears all cuts.
+
+Cuts support undo/redo, autosave and JSON import/export. A cut added at an existing frame replaces it; moving a cut onto another cut replaces the destination. Shortening the project removes cuts beyond its duration. **Clear all project keyframes** and **Delete all** also remove cuts. Fixed camera cuts do not automatically track moving objects.

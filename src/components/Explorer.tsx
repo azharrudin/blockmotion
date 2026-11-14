@@ -3,6 +3,7 @@ import { Box, Camera, ChevronDown, ChevronRight, CircleHelp, Clapperboard, Eye, 
 import { useEditor } from '../editor/store';
 import { BONE_LABELS, JOINT_IDS } from '../editor/types';
 import type { PresetName } from '../editor/presets';
+import { EnvironmentGenerator } from './EnvironmentGenerator';
 import { AssetLibrary } from './AssetLibrary';
 
 import { isCharacter, jointNodeId } from '../editor/characters';
@@ -29,6 +30,7 @@ export function Explorer() {
   return <aside className="explorer left-panel">
     <div className="panel-heading"><span className="panel-heading-title"><Layers3 size={15}/> EXPLORER</span><button title="About explorer" className="heading-action" onClick={() => flash('Select a joint to manipulate it in the viewport')}><CircleHelp size={14}/></button></div>
     <div className="explorer-scroll">
+      <EnvironmentGenerator/>
       <AssetLibrary/>
       <div className="section-label with-action">SCENE HIERARCHY <button className="scene-clear-button" title="Delete all objects, characters, and keyframes" onClick={deleteAll}><Trash2 size={12}/> Delete all</button></div>
       <div className="scene-tree">

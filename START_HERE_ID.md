@@ -49,3 +49,17 @@ Versi ini adalah MVP. Tidak memerlukan file GLB/FBX, backend, atau database serv
 - **Reset pose**: netralkan sendi karakter pada playhead tanpa mengubah posisi seluruh karakter. Auto-key merekam perubahan ini; jika nonaktif, tekan **Key pose** untuk menyimpannya.
 - **Explorer → Delete all**: hapus seluruh objek, karakter, dan keyframe (termasuk animasi kamera). Scene tidak menambahkan karakter default kembali. Pengaturan proyek dan sky tetap disimpan.
 - Gunakan **Ctrl/Cmd+Z** untuk membatalkan reset atau penghapusan.
+
+## Generator lingkungan
+
+Buka **Explorer → Environment generator**, lalu pilih **Town**, **City**, **Mountains**, **Jungle**, atau **Desert**. Atur jumlah blok/bangunan untuk kota atau ukuran, tinggi, jumlah pohon/kaktus, dan batu untuk alam. **Seed** yang sama menghasilkan susunan yang sama. **Origin X/Z** menggeser lokasi hasil.
+
+Pilih **Add to scene** untuk menambahkan hasil, atau **Replace scene objects** untuk mengganti objek yang ada. Perkiraan jumlah objek ditampilkan sebelum Generate, dengan batas 500 objek. Hasil langsung masuk ke tampilan kamera editor; **Frame result** menampilkannya kembali. Satu kali **Ctrl/Cmd+Z** membatalkan satu generasi. Bangunan dan vegetasi bisa diedit terpisah; terrain dan jaringan jalan masing-masing berupa satu node.
+
+## Pergantian kamera otomatis saat Play
+
+Di timeline, pilih sudut pada **Camera cuts**, geser playhead, lalu tekan **Cut here**. Ulangi pada waktu lain. Aktifkan **Preview cuts**, kemudian tekan **Play** untuk mengganti sudut otomatis sesuai timeline.
+
+**Current view** menyimpan tampilan kamera yang sedang terlihat. **Front / Back / Left / Right / Top / Perspective** membingkai objek terpilih; **Shot Camera** memakai animasi kamera yang sudah dibuat. Sudut tersimpan bersifat tetap, belum mengikuti objek otomatis.
+
+Ikon kamera pada baris **Camera cuts** bisa digeser, dipilih untuk mengedit waktunya, atau dihapus dengan tombol sampah / **Delete**. **Capture view** mengganti sudut cut terpilih. Perubahan mendukung undo/redo dan ikut tersimpan dalam proyek maupun digunakan saat rekaman WebM.

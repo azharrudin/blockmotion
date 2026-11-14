@@ -11,8 +11,8 @@ const api=await import('data:text/javascript;base64,'+Buffer.from(bundle.outputF
 const {useEditor,isValidProject,persistProject,TOWN_ASSETS,ROAD_MODULE,ROAD_WIDTH,snapToGrid,ASSET_CATALOG,createSceneObject,buildSceneAsset,disposeSceneAsset,sampleNodePose,StudioScene,THREE}=api;
 const s=()=>useEditor.getState();
 const storage=new Map();globalThis.localStorage={setItem:(k,v)=>storage.set(k,v),getItem:k=>storage.get(k)??null};
-assert.equal(Object.keys(TOWN_ASSETS).length,29);assert.equal(Object.keys(ASSET_CATALOG).length,46);
-assert.equal(Object.values(ASSET_CATALOG).filter(a=>a.category==='Town').length,36);
+assert.equal(Object.keys(TOWN_ASSETS).length,29);assert.equal(Object.keys(ASSET_CATALOG).length,51);
+assert.equal(Object.values(ASSET_CATALOG).filter(a=>a.category==='Town').length,37);
 assert.equal(ROAD_MODULE,6);assert.equal(ROAD_WIDTH,4);
 s().deleteAll();
 for(const kind of Object.keys(TOWN_ASSETS)){

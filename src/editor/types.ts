@@ -22,16 +22,26 @@ export type SkySettings = {
   stars: boolean;
 };
 export type TownAssetKind = 'roadCurve' | 'roadT' | 'sidewalk' | 'sidewalkCorner' | 'crosswalk' | 'parking' | 'trafficLight' | 'roadSign' | 'barrier' | 'trashBin' | 'car' | 'motorcycle' | 'bus' | 'busStop' | 'apartment' | 'office' | 'cafe' | 'school' | 'minimarket' | 'gasStation' | 'grassTile' | 'parkPath' | 'flowerPot' | 'fountain' | 'playground' | 'shopSign' | 'billboard' | 'powerPole' | 'mailbox';
-export type AssetKind = TownAssetKind | 'cube' | 'sphere' | 'cylinder' | 'plane' | 'r6Male' | 'r6Female' | 'tree' | 'pine' | 'bush' | 'rock' | 'road' | 'intersection' | 'store' | 'house' | 'bench' | 'streetlight' | 'fence';
+export type TerrainConfig = { biome: 'grass' | 'mountains' | 'jungle' | 'desert'; size: number; height: number; seed: number };
+export type RoadGridConfig = { columns: number; rows: number; blockSize: 18 };
+export type CameraSettings = { projection: 'perspective' | 'orthographic'; fov: number; orthoSize: number; targetId: string | null; followOffset: Vec3; lookAtTarget: boolean };
+export type AssetKind = 'camera' | 'terrain' | 'jungleTree' | 'palm' | 'cactus' | 'roadNetwork' | TownAssetKind | 'cube' | 'sphere' | 'cylinder' | 'plane' | 'r6Male' | 'r6Female' | 'tree' | 'pine' | 'bush' | 'rock' | 'road' | 'intersection' | 'store' | 'house' | 'bench' | 'streetlight' | 'fence';
 export type SceneObject = {
   id: string; kind: AssetKind; name: string; color: string; pose: Pose; keyframes?: Keyframe[];
   joints?: Partial<Record<JointId, Keyframe[]>>;
+  camera?: CameraSettings;
+  terrain?: TerrainConfig;
+  roadGrid?: RoadGridConfig;
   skinColor?: string;
   pantsColor?: string;
 };
+export type CameraCutView = 'node' | 'current' | 'shot' | 'perspective' | 'front' | 'back' | 'left' | 'right' | 'top';
+export type CameraCut = { id: string; time: number; view: CameraCutView; cameraId?: string; pose?: Pose; fov?: number };
 export type Project = {
   version: 1;
   sceneVersion?: 2;
+  cameraVersion?: 1;
+  activeCameraId?: string | null;
   name: string;
   duration: number;
   fps: number;
@@ -39,6 +49,7 @@ export type Project = {
   tracks: Tracks;
   palette: Palette;
   sky?: SkySettings;
+  cameraCuts?: CameraCut[];
   objects?: SceneObject[];
 };
 

@@ -1,10 +1,13 @@
 import { clonePose, keyId, neutralPose, type AssetKind, type SceneObject, type Pose, JOINT_IDS } from './types';
 
 import { TOWN_ASSETS, snapToGrid, type AssetDefinition } from './town';
+import { DEFAULT_CAMERA_SETTINGS, isValidCameraSettings } from './cameras';
+import { isValidTerrain } from './terrain';
 import { isCharacterKind, isJointId } from './characters';
 
-export const MAX_OBJECTS = 100;
+export const MAX_OBJECTS = 500;
 export const ASSET_CATALOG: Record<AssetKind, AssetDefinition> = {
+  camera: { label: 'Camera', category: 'Cameras', color: '#89b7e7', keywords: 'kamera perspective orthographic' },
   r6Male: { label: 'Blocky R6 Male', category: 'Characters', color: '#427fe4' },
   r6Female: { label: 'Blocky R6 Female', category: 'Characters', color: '#ab67c9' },
   tree: { label: 'Tree', category: 'Nature', color: '#4d9952' },
@@ -23,6 +26,11 @@ export const ASSET_CATALOG: Record<AssetKind, AssetDefinition> = {
   cylinder: { label: 'Cylinder', category: 'Primitives', color: '#9d88d0' },
   plane: { label: 'Ground tile', category: 'Primitives', color: '#7b9a70' },
   ...TOWN_ASSETS,
+  terrain: { label: 'Terrain', category: 'Nature', color: '#ffffff', keywords: 'gunung pegunungan pasir terrain tanah desert' },
+  jungleTree: { label: 'Jungle tree', category: 'Nature', color: '#438958', keywords: 'pohon hutan jungle' },
+  palm: { label: 'Palm tree', category: 'Nature', color: '#61985b', keywords: 'pohon palem kelapa' },
+  cactus: { label: 'Cactus', category: 'Nature', color: '#6a9366', keywords: 'kaktus gurun desert' },
+  roadNetwork: { label: 'Road network', category: 'Town', section: 'Roads', color: '#424955', keywords: 'jalan jaringan kota grid' },
 };
 
 export function createSceneObject(kind: AssetKind, existing: SceneObject[], gridSize?: number): SceneObject {
@@ -35,9 +43,10 @@ export function createSceneObject(kind: AssetKind, existing: SceneObject[], grid
     if (gridSize !== undefined) pose.position = pose.position.map(v => snapToGrid(v, gridSize)) as Pose['position'];
     slot++;
   } while (existing.some(o => Math.hypot(o.pose.position[0] - pose.position[0], o.pose.position[2] - pose.position[2]) < 2));
+  if (kind === 'camera') Object.assign(pose, neutralPose('camera'));
   let suffix = 1;
   while (existing.some(o => o.name === `${asset.label} ${suffix}`)) suffix++;
-  return { id: `obj_${keyId()}`, kind, name: `${asset.label} ${suffix}`, color: asset.color, pose: clonePose(pose), keyframes: [{ id: keyId(), time: 0, value: clonePose(pose) }], ...(isCharacterKind(kind) && {
+  return { id: `obj_${keyId()}`, kind, name: `${asset.label} ${suffix}`, color: asset.color, ...(kind === 'camera' && { camera: { ...DEFAULT_CAMERA_SETTINGS, followOffset: [...DEFAULT_CAMERA_SETTINGS.followOffset] } }), pose: clonePose(pose), keyframes: [{ id: keyId(), time: 0, value: clonePose(pose) }], ...(isCharacterKind(kind) && {
     joints: Object.fromEntries(JOINT_IDS.map(joint => [joint, [{ id: keyId(), time: 0, value: neutralPose() }]])),
     skinColor: '#f3c58b', pantsColor: '#343d53',
   }) };
@@ -50,6 +59,13 @@ export function isValidSceneObject(value: unknown, duration = 600): value is Sce
   if (typeof o.kind !== 'string' || !Object.hasOwn(ASSET_CATALOG, o.kind)) return false;
   if (typeof o.name !== 'string' || o.name.trim().length === 0 || o.name.length > 60) return false;
   if (typeof o.color !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(o.color)) return false;
+  if (o.camera !== undefined && (o.kind !== 'camera' || !isValidCameraSettings(o.camera))) return false;
+  if (o.terrain !== undefined && (o.kind !== 'terrain' || !isValidTerrain(o.terrain))) return false;
+  if (o.roadGrid !== undefined) {
+    if (o.kind !== 'roadNetwork' || typeof o.roadGrid !== 'object' || o.roadGrid === null) return false;
+    const grid = o.roadGrid as Record<string, unknown>;
+    if (grid.blockSize !== 18 || !['columns', 'rows'].every(k => typeof grid[k] === 'number' && Number.isInteger(grid[k]) && grid[k] >= 1 && grid[k] <= 8)) return false;
+  }
   if (!isValidObjectPose(o.pose)) return false;
   if (o.keyframes !== undefined && !isValidObjectKeys(o.keyframes, duration)) return false;
   if (o.joints !== undefined) {

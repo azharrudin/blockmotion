@@ -2,6 +2,7 @@ import { BONE_IDS, JOINT_IDS, clonePose, keyId, neutralPose, type BoneId, type P
 
 import { createSceneObject } from './assets';
 import { isCharacter } from './characters';
+import { isCamera, cameraSettings } from './cameras';
 import { sampleObjectPose } from './interpolation';
 
 const COLORS: Palette = { skin: '#f3c58b', shirt: '#427fe4', pants: '#343d53', background: '#141b2b' };
@@ -20,7 +21,9 @@ export function createProject(name = 'Untitled animation'): Project {
   character.keyframes = [{ id: keyId(), time: 0, value: clonePose(character.pose) }];
   const tracks = emptyTracks();
   for (const id of BONE_IDS) if (id !== 'camera') tracks[id] = [];
-  return { version: 1, sceneVersion: 2, name, duration: 4, fps: 30, interpolation: 'smooth', tracks, palette: { ...COLORS }, objects: [character] };
+  const camera = createSceneObject('camera', [character]);
+  tracks.camera = [];
+  return { version: 1, sceneVersion: 2, cameraVersion: 1, activeCameraId: camera.id, name, duration: 4, fps: 30, interpolation: 'smooth', tracks, palette: { ...COLORS }, objects: [character, camera] };
 }
 export type PresetName = 'wave' | 'walk' | 'jump' | 'idle' | 'cinematic';
 export function createPreset(name: PresetName, old: Project, targetId?: string): Project {
@@ -87,7 +90,8 @@ export function createPreset(name: PresetName, old: Project, targetId?: string):
   const target = old.objects?.find(o => o.id === targetId && isCharacter(o));
   if (name !== 'cinematic' && !target) return old;
   const objects = (old.objects ?? []).map(object => {
-    if (!target || object.id !== target.id || name === 'cinematic') return object;
+    if (name === 'cinematic') return object.id === targetId && isCamera(object) ? {...object,keyframes:tracks.camera,camera:{...cameraSettings(object),targetId:null}} : object;
+    if (!target || object.id !== target.id) return object;
     const base = sampleObjectPose(object, 0, old.interpolation);
     return { ...object, keyframes: tracks.root.map(k => ({ ...k, value: {
       position: base.position.map((v, i) => v + k.value.position[i]) as Pose['position'],
@@ -95,7 +99,7 @@ export function createPreset(name: PresetName, old: Project, targetId?: string):
       scale: base.scale.map((v, i) => v * k.value.scale[i]) as Pose['scale'],
     } })), joints: Object.fromEntries(JOINT_IDS.map(joint => [joint, tracks[joint]])) };
   });
-  const globalTracks = name === 'cinematic' ? { ...old.tracks, camera: tracks.camera } : old.tracks;
+  const globalTracks = old.tracks;
   // Other characters, props, and the camera keep their full animation duration.
   duration = Math.min(600, objects.reduce((end, object) =>
     [...(object.keyframes ?? []), ...Object.values(object.joints ?? {}).flat()].reduce((latest, k) => Math.max(latest, k.time), end), duration));

@@ -2,10 +2,11 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { currentPose, useEditor } from '../editor/store';
-import { JOINT_IDS, type Tool, type Vec3 } from '../editor/types';
+import { JOINT_IDS, type CameraCutView, type Tool, type Vec3 } from '../editor/types';
 import { JOINT_POSITIONS, jointNodeId, resolveObjectNode } from '../editor/characters';
 import { characterNodes } from './CharacterAsset';
 import { sampleNodePose } from '../editor/tracks';
+import { activeCameraCut, type CameraSnapshot } from '../editor/cameraCuts';
 import { SKY_PRESETS } from '../editor/sky';
 import type { SkySettings } from '../editor/types';
 import type { SceneObject } from '../editor/types';
@@ -18,8 +19,9 @@ const VECTOR = (v: Vec3) => new THREE.Vector3(v[0], v[1], v[2]);
 export class StudioScene {
   private container: HTMLElement;
   readonly scene = new THREE.Scene();
-  readonly editorCamera = new THREE.PerspectiveCamera(42, 1, 0.1, 200);
-  readonly shotCamera = new THREE.PerspectiveCamera(48, 1, 0.1, 200);
+  readonly editorCamera = new THREE.PerspectiveCamera(42, 1, 0.1, 2000);
+  readonly shotCamera = new THREE.PerspectiveCamera(48, 1, 0.1, 2000);
+  readonly cutCamera = new THREE.PerspectiveCamera(42, 1, 0.1, 2000);
   readonly renderer: THREE.WebGLRenderer;
   private orbit: OrbitControls;
   private controls: TransformControls;
@@ -27,7 +29,7 @@ export class StudioScene {
   private cameraHelper: THREE.CameraHelper;
   private raycaster = new THREE.Raycaster();
   private cursor = new THREE.Vector2();
-  private assetNodes = new Map<string, { root: THREE.Group; kind: SceneObject['kind']; color: string }>();
+  private assetNodes = new Map<string, { root: THREE.Group; kind: SceneObject['kind']; color: string; geometryKey: string }>();
   private objectList: SceneObject[] | undefined;
   private highlight = new THREE.BoxHelper(new THREE.Object3D(), 0x8ac4ff);
   private skyCache = '';
@@ -59,7 +61,7 @@ export class StudioScene {
         #include <colorspace_fragment>
       }`,
   });
-  private skyDome = new THREE.Mesh(new THREE.SphereGeometry(90, 48, 24), this.skyMaterial);
+  private skyDome = new THREE.Mesh(new THREE.SphereGeometry(1500, 48, 24), this.skyMaterial);
   private ambientLight = new THREE.HemisphereLight(0xf0f5ff, 0x3b4059, 2.1);
   private keyLight = new THREE.DirectionalLight(0xfff5e8, 3.1);
   private fillLight = new THREE.DirectionalLight(0x648fff, 1.7);
@@ -227,6 +229,8 @@ export class StudioScene {
     this.editorCamera.updateProjectionMatrix();
     this.shotCamera.aspect = width / height;
     this.shotCamera.updateProjectionMatrix();
+    this.cutCamera.aspect = width / height;
+    this.cutCamera.updateProjectionMatrix();
   };
 
   private selectedNode(): THREE.Object3D | undefined {
@@ -290,14 +294,15 @@ export class StudioScene {
     }
     for (const object of objects ?? []) {
       let node = this.assetNodes.get(object.id);
-      if (node && node.kind !== object.kind) {
+      const geometryKey = JSON.stringify([object.kind, object.terrain, object.roadGrid]);
+      if (node && node.geometryKey !== geometryKey) {
         if (this.controls.object === node.root || this.controls.object?.userData.objectId === object.id) this.controls.detach();
         this.scene.remove(node.root);
         disposeSceneAsset(node.root);
         node = undefined;
       }
       if (!node) {
-        node = { root: buildSceneAsset(object), kind: object.kind, color: object.color };
+        node = { root: buildSceneAsset(object), kind: object.kind, color: object.color, geometryKey };
         this.assetNodes.set(object.id, node);
         this.scene.add(node.root);
       }
@@ -311,6 +316,43 @@ export class StudioScene {
       node.color = object.color;
     }
     this.applySceneObjectPoses();
+    this.updateSceneDistances();
+  }
+
+  private sceneBounds(ids?: string[]) {
+    const bounds = new THREE.Box3();
+    const selected = ids && new Set(ids);
+    for (const [id, node] of this.assetNodes) {
+      if (selected && !selected.has(id)) continue;
+      node.root.updateWorldMatrix(true, true);
+      bounds.union(new THREE.Box3().setFromObject(node.root));
+    }
+    return bounds;
+  }
+
+  private updateSceneDistances() {
+    const bounds = this.sceneBounds();
+    const span = bounds.isEmpty() ? 0 : bounds.getSize(new THREE.Vector3()).length();
+    if (this.scene.fog instanceof THREE.Fog) {
+      this.scene.fog.near = Math.max(15, span * 0.9);
+      this.scene.fog.far = Math.max(46, span * 4);
+    }
+    if (this.orbit) this.orbit.maxDistance = Math.max(45, span * 4);
+  }
+
+  focusObjects(ids?: string[]) {
+    const bounds = this.sceneBounds(ids);
+    if (bounds.isEmpty()) return;
+    const center = bounds.getCenter(new THREE.Vector3());
+    const radius = Math.max(2, bounds.getSize(new THREE.Vector3()).length() / 2);
+    const vertical = deg(this.editorCamera.fov) / 2;
+    const halfFov = Math.min(vertical, Math.atan(Math.tan(vertical) * this.editorCamera.aspect));
+    const distance = radius / Math.sin(halfFov) * 1.12;
+    this.orbit.maxDistance = Math.max(this.orbit.maxDistance, distance * 1.2);
+    this.orbit.target.copy(center);
+    this.editorCamera.position.copy(center).add(new THREE.Vector3(0.65, 0.7, 1).normalize().multiplyScalar(distance));
+    this.orbit.update();
+    if (useEditor.getState().cameraPreview) useEditor.getState().setCameraPreview(false);
   }
 
   private applySceneObjectPoses() {
@@ -356,15 +398,52 @@ export class StudioScene {
       this.highlight.setFromObject(selected);
       this.highlight.update();
     }
-    const camera = state.cameraPreview ? this.shotCamera : this.editorCamera;
+    const camera = this.playbackCamera();
     this.skyDome.position.copy(camera.position);
     this.renderer.render(this.scene, camera);
   };
 
-  setView(view: 'front' | 'left' | 'right' | 'top' | 'perspective') {
+  playbackCamera(): THREE.PerspectiveCamera {
+    const state = useEditor.getState();
+    if (!state.cameraPreview) return this.editorCamera;
+    const cut = activeCameraCut(state.project.cameraCuts, state.time);
+    if (!cut || cut.view === 'shot' || !cut.pose) return this.shotCamera;
+    this.cutCamera.position.set(...cut.pose.position);
+    this.cutCamera.rotation.set(...cut.pose.rotation.map(deg) as Vec3);
+    this.cutCamera.scale.set(...cut.pose.scale);
+    if (this.cutCamera.fov !== cut.fov) { this.cutCamera.fov = cut.fov!; this.cutCamera.updateProjectionMatrix(); }
+    this.cutCamera.updateMatrixWorld();
+    return this.cutCamera;
+  }
+
+  captureCutView(view: CameraCutView): CameraSnapshot | undefined {
+    if (view === 'shot') return undefined;
+    let camera = this.playbackCamera();
+    if (view !== 'current') {
+      this.applySceneObjectPoses();
+      const state = useEditor.getState();
+      const root = state.selectedObject && this.assetNodes.get(state.selectedObject)?.root;
+      root && root.updateWorldMatrix(true, true);
+      const bounds = root ? new THREE.Box3().setFromObject(root) : this.sceneBounds();
+      const center = bounds.isEmpty() ? new THREE.Vector3(0,1.65,0) : bounds.getCenter(new THREE.Vector3());
+      const radius = bounds.isEmpty() ? 3 : Math.max(1.5, bounds.getSize(new THREE.Vector3()).length()/2);
+      const half = deg(this.editorCamera.fov)/2;
+      const distance = radius / Math.sin(Math.min(half,Math.atan(Math.tan(half)*this.editorCamera.aspect))) * 1.12;
+      const directions = {front:[0,0.12,1],back:[0,0.12,-1],left:[-1,0.12,0],right:[1,0.12,0],top:[0,1,0.001],perspective:[0.65,0.4,1]} as const;
+      camera = new THREE.PerspectiveCamera(this.editorCamera.fov,this.editorCamera.aspect,0.1,2000);
+      const direction = directions[view];
+      camera.position.copy(center).add(new THREE.Vector3(...direction).normalize().multiplyScalar(distance));
+      camera.lookAt(center);
+    }
+    return { pose: { position: camera.position.toArray() as Vec3,
+      rotation:[rad(camera.rotation.x),rad(camera.rotation.y),rad(camera.rotation.z)],scale:[1,1,1] }, fov:camera.fov };
+  }
+
+  setView(view: 'front' | 'back' | 'left' | 'right' | 'top' | 'perspective') {
     const target = new THREE.Vector3(0, 1.65, 0);
     const positions = {
       front: new THREE.Vector3(0, 1.75, 10),
+      back: new THREE.Vector3(0, 1.75, -10),
       left: new THREE.Vector3(-10, 1.75, 0),
       right: new THREE.Vector3(10, 1.75, 0),
       top: new THREE.Vector3(0, 11, 0.01),

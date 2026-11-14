@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Camera, Eye, Focus, Grid3X3, Maximize2, Move, RotateCw, Scaling, Video, VideoOff } from 'lucide-react';
 import { StudioScene } from '../engine/StudioScene';
 import { useEditor } from '../editor/store';
+import { CAMERA_CUT_LABELS, activeCameraCut } from '../editor/cameraCuts';
 import { GRID_SIZES } from '../editor/town';
 import { BONE_LABELS } from '../editor/types';
 import type { Tool } from '../editor/types';
@@ -16,7 +17,9 @@ const tools: { key: Tool; icon: typeof Move; shortcut: string }[] = [
 export function Viewport() {
   const mount = useRef<HTMLDivElement>(null);
   const [viewOpen, setViewOpen] = useState(false);
-  const { tool, setTool, cameraPreview, setCameraPreview, selection, selectedObject, selectedJoint, project, gridSnap, gridSize, setGridSnap, setGridSize } = useEditor();
+  const { tool, setTool, cameraPreview, setCameraPreview, selection, selectedObject, selectedJoint, project, time, gridSnap, gridSize, setGridSnap, setGridSize } = useEditor();
+  const activeCut = activeCameraCut(project.cameraCuts,time);
+  const cameraLabel = cameraPreview ? activeCut ? `CUT / ${CAMERA_CUT_LABELS[activeCut.view].toUpperCase()}` : 'SHOT CAMERA' : 'PERSPECTIVE';
   useEffect(() => {
     if (!mount.current) return;
     const studio = new StudioScene(mount.current);
@@ -27,7 +30,7 @@ export function Viewport() {
     <section className="viewport-panel">
       <div ref={mount} className="viewport-mount" />
       <div className="viewport-top">
-        <div className="viewport-tag"><span className="status-dot"/> 3D VIEWPORT <span className="tag-divider"/> {cameraPreview ? 'SHOT CAMERA' : 'PERSPECTIVE'}</div>
+        <div className="viewport-tag"><span className="status-dot"/> 3D VIEWPORT <span className="tag-divider"/> {cameraLabel}</div>
         <div className="viewport-mode snap-controls">
           <button className={gridSnap ? 'active' : ''} aria-pressed={gridSnap} title="Snap object positions to the grid (joint editing stays free)" onClick={() => setGridSnap(!gridSnap)}><Grid3X3 size={13}/> Snap</button>
           <select aria-label="Grid snap size" value={gridSize} onChange={e => setGridSize(Number(e.target.value))}>{GRID_SIZES.map(size => <option key={size} value={size}>{size} u</option>)}</select>
@@ -50,7 +53,7 @@ export function Viewport() {
           <div className="relative">
             <button className="small-overlay-btn" onClick={() => setViewOpen(!viewOpen)} title="Change viewport angle"><Eye size={13}/> Views ⌄</button>
             {viewOpen && <div className="view-menu">
-              {(['perspective', 'front', 'left', 'right', 'top'] as const).map(view => <button key={view} onClick={() => { studioRef.current?.setView(view); setViewOpen(false); }}>{view}</button>)}
+              {(['perspective', 'front', 'back', 'left', 'right', 'top'] as const).map(view => <button key={view} onClick={() => { studioRef.current?.setView(view); setViewOpen(false); }}>{view}</button>)}
             </div>}
           </div>
           <button className="small-overlay-btn icon-only" title="Reset camera framing" onClick={() => studioRef.current?.setView('perspective')}><Maximize2 size={13}/></button>

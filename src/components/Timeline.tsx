@@ -1,9 +1,11 @@
 import { useEffect, useRef } from 'react';
-import { ChevronDown, ChevronUp, CircleHelp, Diamond, FastForward, KeyRound, Pause, Play, Plus, Repeat2, Rewind, SkipBack, SkipForward, Trash2 } from 'lucide-react';
+import { Camera, ChevronDown, ChevronUp, CircleHelp, Diamond, FastForward, KeyRound, Pause, Play, Plus, Repeat2, Rewind, SkipBack, SkipForward, Trash2 } from 'lucide-react';
 import { useEditor } from '../editor/store';
 import { JOINT_IDS } from '../editor/types';
 import { isCharacter, jointNodeId } from '../editor/characters';
 import { timelineTracks } from '../editor/tracks';
+import { CameraCuts } from './CameraCuts';
+import { CAMERA_CUT_LABELS, activeCameraCut } from '../editor/cameraCuts';
 import { KeyframeActions } from './KeyframeActions';
 
 const clock = (time: number) => {
@@ -17,8 +19,11 @@ export function Timeline() {
   const s = useEditor();
   const moving = useRef<{ node: string; id: string } | null>(null);
   const tracks = timelineTracks(s.project);
+  const cuts = s.project.cameraCuts ?? [];
+  const movingCut = useRef<string | null>(null);
+  const playingCut = activeCameraCut(cuts,s.time);
   const contents = useRef<HTMLDivElement>(null);
-  const selectedTrack = s.selection;
+  const selectedTrack = s.selectedCut ?? s.selection;
   useEffect(() => {
     contents.current?.querySelector('.track-label.active')?.scrollIntoView({ block: 'nearest' });
   }, [selectedTrack, tracks.length]);
@@ -64,8 +69,9 @@ export function Timeline() {
         <button className={`loop-button ${s.autoKey ? 'active' : ''}`} title="Auto insert keyframes when transforms are edited" onClick={() => s.setAutoKey(!s.autoKey)}><span className="autokey-dot"/> Auto key</button>
       </div>
     </div>
+    <CameraCuts/>
     <div className="track-actions">
-      <span className="track-list-heading">TRACKS <span>({tracks.length})</span></span>
+      <span className="track-list-heading">TRACKS <span>({tracks.length + 1})</span></span>
       <button title="Insert keyframe on selected track (K)" onClick={() => s.commitKey()}><Plus size={13}/> Keyframe</button>
       <button title="Insert keyframes for the selected character and its joints" disabled={!character} onClick={allPose}><KeyRound size={13}/> Key pose</button>
       <button title="Delete selected keyframe" disabled={!s.selectedKey} onClick={() => s.deleteKey()}><Trash2 size={13}/></button>
@@ -77,6 +83,7 @@ export function Timeline() {
     <div className="timeline-contents" ref={contents}>
       <div className="timeline-labels">
         <div className="ruler-stub"><span>Object / Joint</span></div>
+        <button className={`track-label camera-cut-track ${s.selectedCut?'active':''}`} title="Camera cuts: automatic view changes during playback" onClick={()=>s.setCameraPreview(true)}><span className="track-collapse"/><span className="track-color cut-track"/><span className="track-name">Camera cuts</span><span className="track-key-count">{cuts.length}</span></button>
         {tracks.map(track => <button className={`track-label ${track.joint ? 'joint-track-label' : ''} ${active(track.id) ? 'active' : ''}`} key={track.id} data-track-id={track.id} title={track.title} onClick={() => selectTrack(track.id)}><span className="track-collapse">{track.object && !track.joint ? <ChevronDown size={12}/> : null}</span><span className={`track-color ${track.object ? 'object-track' : track.id === 'camera' ? 'camera-track' : ''}`}/><span className="track-name">{track.label}</span><span className="track-key-count">{track.keys.length}</span></button>)}
       </div>
       <div className="timeline-canvas">
@@ -85,6 +92,12 @@ export function Timeline() {
           <div className="ruler-playhead" style={{left: percent(s.time)}}/>
         </div>
         <div className="timeline-grid">
+          <div className={`track-row camera-cut-row ${s.selectedCut?'active':''}`} onClick={e=>s.seek(toTime(e.currentTarget,e.clientX))}>
+            <div className="track-grid-lines">{Array.from({length:TICKS+1},(_,i)=><span key={i} style={{left:`${i*100/TICKS}%`}}/>)}</div>
+            {cuts.map(cut=><button key={cut.id} data-cut-id={cut.id} className={`keyframe-diamond camera-cut-diamond ${s.selectedCut===cut.id?'selected':''} ${s.cameraPreview&&playingCut?.id===cut.id?'playing-cut':''}`} style={{left:percent(cut.time)}} title={`${CAMERA_CUT_LABELS[cut.view]} @ ${cut.time.toFixed(2)}s — drag to move cut`}
+              onClick={e=>e.stopPropagation()} onPointerDown={e=>{e.stopPropagation();movingCut.current=cut.id;e.currentTarget.setPointerCapture(e.pointerId);}}
+              onPointerUp={e=>{e.stopPropagation();const id=movingCut.current;movingCut.current=null;if(!id)return;const row=e.currentTarget.parentElement;if(!row)return;const time=toTime(row,e.clientX);if(Math.abs(time-cut.time)>0.5/s.project.fps)s.moveCameraCut(id,time);else s.selectCameraCut(id);}}><Camera size={12}/></button>)}
+          </div>
           {tracks.map(({ id, title, keys }) => <div key={id} data-track-id={id} className={`track-row ${active(id) ? 'active' : ''}`} onClick={e => { selectTrack(id); s.setSelectedKey(null); s.seek(toTime(e.currentTarget, e.clientX)); }}>
             <div className="track-grid-lines">{Array.from({length:TICKS+1}, (_, i) => <span key={i} style={{left:`${i*100/TICKS}%`}}/>)}</div>
             {keys.map(k => <button key={k.id} className={`keyframe-diamond ${s.selectedKey?.node === id && s.selectedKey.id === k.id ? 'selected' : ''}`} style={{left: percent(k.time)}} title={`${title} @ ${k.time.toFixed(2)}s — drag to move`} onPointerDown={e => { e.stopPropagation(); moving.current = {node:id,id:k.id}; e.currentTarget.setPointerCapture(e.pointerId); }} onClick={e => e.stopPropagation()} onPointerUp={e => {

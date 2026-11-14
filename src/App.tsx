@@ -80,7 +80,7 @@ export default function App() {
         case 'c': state.setCameraPreview(!state.cameraPreview); break;
         case 'arrowleft': event.preventDefault(); state.seek(state.time - 1 / state.project.fps); break;
         case 'arrowright': event.preventDefault(); state.seek(state.time + 1 / state.project.fps); break;
-        case 'delete': case 'backspace': if (state.selectedKey) { event.preventDefault(); state.deleteKey(); } else if (state.selectedObject) { event.preventDefault(); state.deleteObject(); } break;
+        case 'delete': case 'backspace': if (state.selectedCut) { event.preventDefault(); state.deleteCameraCut(); } else if (state.selectedKey) { event.preventDefault(); state.deleteKey(); } else if (state.selectedObject) { event.preventDefault(); state.deleteObject(); } break;
       }
     };
     window.addEventListener('keydown', onKey);
