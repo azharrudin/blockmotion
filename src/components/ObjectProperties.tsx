@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { memo, useEffect, useState } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { Copy, Focus, RotateCcw, Trash2 } from 'lucide-react';
 import type { SceneObject } from '../editor/types';
 import { useEditor } from '../editor/store';
@@ -6,8 +7,10 @@ import { isCharacter } from '../editor/characters';
 import { getTrack } from '../editor/tracks';
 import { studioRef } from './Viewport';
 
-export function ObjectProperties({ object }: { object: SceneObject }) {
-  const state = useEditor();
+export const ObjectProperties = memo(function ObjectProperties({ object }: { object: SceneObject }) {
+  const state = useEditor(useShallow(editor => ({ ...editor,
+    time: editor.playing ? Math.floor(editor.time * 10) / 10 : editor.time,
+  })));
   const [name, setName] = useState(object.name);
   useEffect(() => setName(object.name), [object.id, object.name]);
   const character = isCharacter(object);
@@ -33,4 +36,4 @@ export function ObjectProperties({ object }: { object: SceneObject }) {
     <div className="meta-list"><div><span>Selected track keyframes</span><strong>{getTrack(state.project, state.selection).length}</strong></div><div><span>Current frame</span><strong>{Math.round(state.time * state.project.fps)}</strong></div></div>
     <p className="inspector-help">{character ? 'Expand this character in Explorer to select its torso, head, arms, or legs. Select the character name to move the whole character. Each node has its own keyframes. Delete character removes the whole character and its animation.' : 'Move, rotate, or scale this object with the gizmo or transform fields.'} Press K to record a keyframe. Auto-key records edits on blur or after a gizmo drag.</p>
   </>;
-}
+});

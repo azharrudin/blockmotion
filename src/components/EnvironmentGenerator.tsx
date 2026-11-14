@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { ChevronDown, ChevronUp, Dice5, Focus, WandSparkles } from 'lucide-react';
 import { MAX_OBJECTS } from '../editor/assets';
 import { useEditor } from '../editor/store';
@@ -10,7 +11,7 @@ export function EnvironmentGenerator() {
   const [options,setOptions]=useState(()=>generatorDefaults('town'));
   const [busy,setBusy]=useState(false);
   const [resultIds,setResultIds]=useState<string[]>([]);
-  const state=useEditor();
+  const state=useEditor(useShallow(editor => ({ project: editor.project, generateEnvironment: editor.generateEnvironment })));
   const urban=options.kind==='town'||options.kind==='city';
   const preview=useMemo(()=>{
     try{return {plan:createEnvironmentPlan(options),error:''};}

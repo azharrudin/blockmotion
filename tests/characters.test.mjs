@@ -80,6 +80,20 @@ s().preset('wave');
 assert.ok(obj(male).joints.leftArm.length > 2);
 assert.deepEqual(obj(female), otherBeforePreset, 'motion presets affect only selected character');
 assert.ok(obj(male).keyframes[0].value.position.every((v, i) => v === untouchedMale.keyframes[0].value.position[i]), 'presets preserve character placement');
+const beforeGeneratedMotion = structuredClone(s().project);
+s().generateMotion({ action: 'walk', duration: 2, intensity: 1.5, repeats: 3 });
+assert.equal(obj(male).keyframes.at(-1).time, 6, 'generator expands the clip by the requested repeat count');
+assert.equal(obj(male).keyframes.at(-1).value.position[2], -4.95, 'walking advances the character forward by intensity');
+assert.equal(obj(male).joints.leftLeg.length, 73, 'generator creates a sampled gait cycle for every repeat');
+assert.deepEqual(obj(female), beforeGeneratedMotion.objects.find(object => object.id === female), 'generated motion leaves other characters unchanged');
+assert.equal(isValidProject(s().project), true, 'generated motion remains a valid project');
+s().undo();
+assert.deepEqual(s().project, beforeGeneratedMotion, 'generated motion is one undoable operation');
+for (const action of ['run', 'idle', 'jump', 'wave']) {
+  s().generateMotion({ action, duration: 1, intensity: 1, repeats: 2 });
+  assert.equal(obj(male).keyframes.at(-1).time, 2, `${action} uses the requested clip length`);
+  assert.equal(isValidProject(s().project), true, `${action} produces valid keyframes`);
+}
 s().select('camera'); const charsBeforeCamera = structuredClone(s().project.objects); s().preset('cinematic');
 assert.deepEqual(s().project.objects, charsBeforeCamera, 'camera preset leaves all characters unchanged');
 assert.ok(s().project.tracks.camera.length > 1);

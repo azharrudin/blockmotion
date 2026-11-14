@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { Camera, Eye, Focus, Grid3X3, Maximize2, Move, RotateCw, Scaling, Video, VideoOff } from 'lucide-react';
 import { StudioScene } from '../engine/StudioScene';
 import { useEditor } from '../editor/store';
@@ -6,6 +7,7 @@ import { CAMERA_CUT_LABELS, activeCameraCut } from '../editor/cameraCuts';
 import { GRID_SIZES } from '../editor/town';
 import { BONE_LABELS } from '../editor/types';
 import type { Tool } from '../editor/types';
+import type { PreviewMode, PreviewStats } from '../engine/PreviewQuality';
 
 export const studioRef: { current: StudioScene | null } = { current: null };
 
@@ -17,12 +19,19 @@ const tools: { key: Tool; icon: typeof Move; shortcut: string }[] = [
 export function Viewport() {
   const mount = useRef<HTMLDivElement>(null);
   const [viewOpen, setViewOpen] = useState(false);
-  const { tool, setTool, cameraPreview, setCameraPreview, selection, selectedObject, selectedJoint, project, time, gridSnap, gridSize, setGridSnap, setGridSize } = useEditor();
-  const activeCut = activeCameraCut(project.cameraCuts,time);
+  const [previewMode, setPreviewMode] = useState<PreviewMode>('auto');
+  const [previewStats, setPreviewStats] = useState<PreviewStats | null>(null);
+  const playing = useEditor(state => state.playing);
+  const { tool, setTool, cameraPreview, setCameraPreview, selection, selectedObject, selectedJoint, project, gridSnap, gridSize, setGridSnap, setGridSize } = useEditor(useShallow(state => ({
+    tool: state.tool, setTool: state.setTool, cameraPreview: state.cameraPreview, setCameraPreview: state.setCameraPreview,
+    selection: state.selection, selectedObject: state.selectedObject, selectedJoint: state.selectedJoint,
+    project: state.project, gridSnap: state.gridSnap, gridSize: state.gridSize, setGridSnap: state.setGridSnap, setGridSize: state.setGridSize,
+  })));
+  const activeCut = useEditor(state => state.cameraPreview ? activeCameraCut(state.project.cameraCuts, state.time) : undefined);
   const cameraLabel = cameraPreview ? activeCut ? `CUT / ${CAMERA_CUT_LABELS[activeCut.view].toUpperCase()}` : 'SHOT CAMERA' : 'PERSPECTIVE';
   useEffect(() => {
     if (!mount.current) return;
-    const studio = new StudioScene(mount.current);
+    const studio = new StudioScene(mount.current, setPreviewStats);
     studioRef.current = studio;
     return () => { studioRef.current = null; studio.dispose(); };
   }, []);
@@ -32,6 +41,15 @@ export function Viewport() {
       <div className="viewport-top">
         <div className="viewport-tag"><span className="status-dot"/> 3D VIEWPORT <span className="tag-divider"/> {cameraLabel}</div>
         <div className="viewport-mode snap-controls">
+          {playing && previewStats && <span className="preview-fps" title="Measured preview frame rate">{previewStats.fps} FPS</span>}
+          <select aria-label="Preview quality" title="Auto lowers preview resolution and disables shadows if playback is slow" value={previewMode} onChange={event => {
+            const mode = event.target.value as PreviewMode;
+            setPreviewMode(mode);
+            setPreviewStats(null);
+            studioRef.current?.setPreviewMode(mode);
+          }}>
+            <option value="auto">Auto quality</option><option value="fast">Fast preview</option><option value="quality">Full quality</option>
+          </select>
           <button className={gridSnap ? 'active' : ''} aria-pressed={gridSnap} title="Snap object positions to the grid (joint editing stays free)" onClick={() => setGridSnap(!gridSnap)}><Grid3X3 size={13}/> Snap</button>
           <select aria-label="Grid snap size" value={gridSize} onChange={e => setGridSize(Number(e.target.value))}>{GRID_SIZES.map(size => <option key={size} value={size}>{size} u</option>)}</select>
         </div>

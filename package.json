@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "test": "node tests/objects.test.mjs && node tests/animation.test.mjs && node tests/characters.test.mjs && node tests/reset-actions.test.mjs && node tests/town.test.mjs && node tests/generators.test.mjs && node tests/camera-cuts.test.mjs",
+    "test": "node tests/playback-performance.test.mjs && node tests/motion-generator.test.mjs && node tests/objects.test.mjs && node tests/animation.test.mjs && node tests/characters.test.mjs && node tests/reset-actions.test.mjs && node tests/town.test.mjs && node tests/generators.test.mjs && node tests/camera-cuts.test.mjs",
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 0.0.0.0",

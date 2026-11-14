@@ -1,4 +1,5 @@
 import {useEffect, useState} from 'react';
+import {useShallow} from 'zustand/react/shallow';
 import {Box, Camera, CircleHelp, Diamond, RotateCcw, Settings2, SlidersHorizontal} from 'lucide-react';
 import {useEditor, currentPose} from '../editor/store';
 import {BONE_LABELS, clonePose, neutralPose, type Pose, type SkyPreset} from '../editor/types';
@@ -22,15 +23,27 @@ const colors = [
 
 export function Inspector() {
   const [tab, setTab] = useState<'transform' | 'project'>('transform');
-  const state = useEditor();
+  // Transform readouts need fewer updates than the 3D animation; scrubbing stays exact.
+  const state = useEditor(useShallow(editor => ({ ...editor,
+    time: editor.playing ? Math.floor(editor.time * 10) / 10 : editor.time,
+  })));
   const sky = state.project.sky ?? SKY_PRESETS.studio;
   const object = state.project.objects?.find(o => o.id === state.selectedObject);
   useEffect(() => { setTab('transform'); }, [state.selection]);
   const pose = currentPose();
+  const uniformScale = pose.scale.every(value => Math.abs(value - pose.scale[0]) < 0.0001)
+    ? Number(pose.scale[0].toFixed(2))
+    : '';
   const label = state.selectedJoint ? BONE_LABELS[state.selectedJoint] : object?.name ?? 'Shot Camera';
   const updateAxis = (key: keyof Pose, axis: number, value: number) => {
     if (!Number.isFinite(value)) return;
     const next = clonePose(pose); next[key][axis] = key === 'position' && state.gridSnap && !state.selectedJoint ? snapToGrid(value, state.gridSize) : value;
+    state.updatePose(state.selection, next);
+  };
+  const updateUniformScale = (value: number) => {
+    if (!Number.isFinite(value)) return;
+    const next = clonePose(pose);
+    next.scale = [value, value, value];
     state.updatePose(state.selection, next);
   };
   const commit = () => { if (state.autoKey && state.overrides[state.selection]) state.commitKey(); };
@@ -68,11 +81,15 @@ export function Inspector() {
           <div className="section-label with-action">TRANSFORM <button className="subtle-icon" title="Reset selected transform" onClick={resetPose}><RotateCcw size={13}/></button></div>
           {FIELDS.map(field => <div className="transform-field-group" key={field.key}>
             <div className="transform-field-heading"><span>{field.label}</span><span>{field.unit}</span></div>
-            <div className="axis-grid">{AXES.map((axis, i) => <label className="axis-input" key={axis}>
+            {field.key === 'scale' ? <div className="axis-grid"><label className="axis-input" style={{gridColumn: '1 / -1'}}>
+              <span className="axis-letter">XYZ</span>
+              <input type="number" min={0.01} max={100} step={field.step} value={uniformScale} placeholder={uniformScale === '' ? 'Mixed' : undefined}
+                onChange={e => updateUniformScale(Number(e.target.value))} onBlur={commit} aria-label="Uniform scale X, Y, Z"/>
+            </label></div> : <div className="axis-grid">{AXES.map((axis, i) => <label className="axis-input" key={axis}>
               <span className={`axis-letter ${axis.toLowerCase()}`}>{axis}</span>
               <input type="number" step={field.key === 'position' && state.gridSnap && !state.selectedJoint ? state.gridSize : field.step} value={Number(pose[field.key][i].toFixed(2))}
                 onChange={e => updateAxis(field.key, i, Number(e.target.value))} onBlur={commit} aria-label={`${field.label} ${axis}`}/>
-            </label>)}</div>
+            </label>)}</div>}
           </div>)}
           <button className="keyframe-big-btn" onClick={() => state.commitKey()}><Diamond size={14} fill="currentColor"/> Insert keyframe <span>K</span></button>
           {object ? <ObjectProperties object={object}/> : <p className="inspector-help">Press K to record the camera transform at the playhead. Auto-key records edits on blur or after dragging.</p>}

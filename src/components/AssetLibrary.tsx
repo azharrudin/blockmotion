@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { Box, Plus, Search, X } from 'lucide-react';
 import { ASSET_CATALOG, MAX_OBJECTS } from '../editor/assets';
 import type { AssetKind } from '../editor/types';
@@ -12,7 +13,7 @@ export function AssetLibrary() {
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState('All');
   const [section, setSection] = useState('All Town');
-  const { project, addObject } = useEditor();
+  const { project, addObject } = useEditor(useShallow(state => ({ project: state.project, addObject: state.addObject })));
   const count = project.objects?.length ?? 0;
   const entries = (Object.entries(ASSET_CATALOG) as [AssetKind, (typeof ASSET_CATALOG)[AssetKind]][]).filter(([, asset]) =>
     (category === 'All' || asset.category === category) &&

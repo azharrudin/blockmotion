@@ -1,12 +1,16 @@
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { ChevronDown, RotateCcw, Trash2 } from 'lucide-react';
 import { useEditor } from '../editor/store';
 import { JOINT_IDS } from '../editor/types';
 import { isCharacter, jointNodeId } from '../editor/characters';
 import { getTrack, timelineTracks } from '../editor/tracks';
 
-export function KeyframeActions() {
-  const state = useEditor();
+export const KeyframeActions = memo(function KeyframeActions() {
+  const state = useEditor(useShallow(editor => ({
+    project: editor.project, selectedObject: editor.selectedObject, selection: editor.selection, selectedKey: editor.selectedKey,
+    resetKey: editor.resetKey, deleteKey: editor.deleteKey, clearKeyframes: editor.clearKeyframes,
+  })));
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -34,4 +38,4 @@ export function KeyframeActions() {
       <p>Cleared tracks return to their base transforms. Objects stay in the scene. Undo with Ctrl/Cmd+Z.</p>
     </div>}
   </div>;
-}
+});

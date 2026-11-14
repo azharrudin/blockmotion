@@ -1,12 +1,18 @@
-import { useState } from 'react';
+import { memo, useState } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { Camera, Copy, Plus, Trash2 } from 'lucide-react';
 import { useEditor } from '../editor/store';
 import type { CameraCutView } from '../editor/types';
 import { CAMERA_CUT_LABELS } from '../editor/cameraCuts';
 import { studioRef } from './Viewport';
 
-export function CameraCuts() {
-  const state=useEditor();
+export const CameraCuts = memo(function CameraCuts() {
+  const state=useEditor(useShallow(editor => ({
+    project: editor.project, selectedCut: editor.selectedCut, cameraPreview: editor.cameraPreview,
+    addCameraCut: editor.addCameraCut, setCameraPreview: editor.setCameraPreview, clearCameraCuts: editor.clearCameraCuts,
+    moveCameraCut: editor.moveCameraCut, selectCameraCut: editor.selectCameraCut, recaptureCameraCut: editor.recaptureCameraCut,
+    deleteCameraCut: editor.deleteCameraCut,
+  })));
   const [view,setView]=useState<CameraCutView>('current');
   const cuts=state.project.cameraCuts??[];
   const selected=cuts.find(c=>c.id===state.selectedCut);
@@ -25,4 +31,4 @@ export function CameraCuts() {
       <button title="Delete selected camera cut" onClick={()=>state.deleteCameraCut(selected.id)}><Trash2 size={12}/></button>
     </div>}
   </div>;
-}
+});

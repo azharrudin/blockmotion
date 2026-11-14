@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { JOINT_IDS, type JointId, type SceneObject, type Vec3 } from '../editor/types';
 import { JOINT_POSITIONS } from '../editor/characters';
+import { batchAssetMeshes } from './batchAssets';
 
 export type CharacterNodes = Record<JointId, THREE.Group>;
 export function characterNodes(root: THREE.Object3D): CharacterNodes | undefined {
@@ -56,5 +57,8 @@ export function buildCharacterAsset(object: SceneObject): THREE.Group {
   }
   for (const x of [-0.175, 0.175]) box('head', [0.075, 0.09, 0.02], [x, 0.52, 0.435], materials.eyes);
   box('head', [0.2, 0.035, 0.02], [0, 0.27, 0.435], materials.mouth);
+  // Merge parts only inside each joint, preserving independent joint animation
+  // and the object/joint IDs used by picking and the transform gizmo.
+  for (const joint of JOINT_IDS) batchAssetMeshes(nodes[joint]);
   return root;
 }

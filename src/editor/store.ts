@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { createProject, createPreset, type PresetName } from './presets';
+import { createGeneratedMotion, createProject, createPreset, type MotionOptions, type PresetName } from './presets';
 import { isValidSky, SKY_PRESETS } from './sky';
 import { ASSET_CATALOG, MAX_OBJECTS, createSceneObject, isValidObjectPose, isValidSceneObject } from './assets';
 import { BONE_IDS, JOINT_IDS, clonePose, keyId, neutralPose, roundFrame, type AssetKind, type CameraCut, type CameraCutView, type JointId, type Keyframe, type Palette, type Pose, type Project, type SceneObject, type SkyPreset, type SkySettings, type Tool, type Tracks } from './types';
@@ -117,6 +117,7 @@ type State = {
   setSkyPreset: (preset: SkyPreset) => void;
   updateSky: (data: Partial<Omit<SkySettings, 'preset'>>) => void;
   preset: (name: PresetName) => void;
+  generateMotion: (options: MotionOptions) => void;
   newProject: () => void;
   loadProject: (project: Project) => void;
   undo: () => void;
@@ -219,9 +220,9 @@ export const useEditor = create<State>((set, get) => ({
     if (!s.playing || !Number.isFinite(delta)) return s;
     const next = s.time + Math.max(0, delta);
     if (next > s.project.duration) return s.looping
-      ? { time: next % s.project.duration, ...clearedEdits }
-      : { time: s.project.duration, playing: false, ...clearedEdits };
-    return { time: next, ...clearedEdits };
+      ? { time: next % s.project.duration }
+      : { time: s.project.duration, playing: false };
+    return { time: next };
   }),
   play: playing => set(s => ({ playing: playing ?? !s.playing, selectedCut: null, time: s.time >= s.project.duration ? 0 : s.time, ...clearedEdits })),
   setLooping: looping => set({ looping }), setAutoKey: autoKey => set({ autoKey }),
@@ -380,6 +381,13 @@ export const useEditor = create<State>((set, get) => ({
     const id = name === 'cinematic' ? 'camera' : target!.id;
     return { ...snapshot(s, project), ...selectionPatch({ ...s, project }, id), time: 0, playing: false, ...clearedEdits,
       cameraPreview: name === 'cinematic', notification: `${name[0].toUpperCase() + name.slice(1)} preset loaded${target && name !== 'cinematic' ? ` for ${target.name}` : ''}` };
+  }),
+  generateMotion: options => set(s => {
+    const target = s.project.objects?.find(object => object.id === s.selectedObject && isCharacter(object));
+    if (!target) return { notification: 'Select a character before generating motion' };
+    const project = createGeneratedMotion(s.project, target.id, options);
+    return { ...snapshot(s, project), ...selectionPatch({ ...s, project }, target.id), time: 0, playing: false, ...clearedEdits,
+      cameraPreview: false, notification: `${options.action[0].toUpperCase() + options.action.slice(1)} motion generated for ${target.name}` };
   }),
   newProject: () => set(s => {
     const project = createProject();

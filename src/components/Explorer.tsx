@@ -1,8 +1,9 @@
 import { Fragment, useEffect, useState } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { Box, Camera, ChevronDown, ChevronRight, CircleHelp, Clapperboard, Eye, FolderOpen, Layers3, Lightbulb, PersonStanding, Trash2, Sparkles, Waves, Wind, Footprints, MoveUp, Film, RotateCcw } from 'lucide-react';
 import { useEditor } from '../editor/store';
 import { BONE_LABELS, JOINT_IDS } from '../editor/types';
-import type { PresetName } from '../editor/presets';
+import type { MotionAction, MotionOptions, PresetName } from '../editor/presets';
 import { EnvironmentGenerator } from './EnvironmentGenerator';
 import { AssetLibrary } from './AssetLibrary';
 
@@ -19,7 +20,14 @@ export function Explorer() {
   const [hierarchyOpen, setHierarchyOpen] = useState(true);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [presetOpen, setPresetOpen] = useState(true);
-  const { selection, selectedObject, selectedJoint, selectObject, deleteObject, select, preset, project, flash, resetCharacterPose, deleteAll } = useEditor();
+  const [motionOpen, setMotionOpen] = useState(false);
+  const [motion, setMotion] = useState<MotionOptions>({ action: 'walk', duration: 2, intensity: 1, repeats: 2 });
+  const { selection, selectedObject, selectedJoint, selectObject, deleteObject, select, preset, generateMotion, project, flash, resetCharacterPose, deleteAll } = useEditor(useShallow(state => ({
+    selection: state.selection, selectedObject: state.selectedObject, selectedJoint: state.selectedJoint,
+    selectObject: state.selectObject, deleteObject: state.deleteObject, select: state.select,
+    preset: state.preset, generateMotion: state.generateMotion, project: state.project,
+    flash: state.flash, resetCharacterPose: state.resetCharacterPose, deleteAll: state.deleteAll,
+  })));
   useEffect(() => {
     if (!selectedObject || !selectedJoint) return;
     setCollapsed(previous => {
@@ -57,6 +65,22 @@ export function Explorer() {
       </div>
       {presetOpen && <>
         <p className="sidebar-copy">Select a character, then apply a motion and customize its joints.</p>
+        <div className="environment-generator motion-generator">
+          <button className="generator-toggle" aria-expanded={motionOpen} onClick={() => setMotionOpen(!motionOpen)}><Sparkles size={15}/> Procedural Motion {motionOpen ? <ChevronDown size={13}/> : <ChevronRight size={13}/>}</button>
+          {motionOpen && <form className="generator-content" onSubmit={event => { event.preventDefault(); generateMotion(motion); }}>
+            <label className="generator-field"><span>Action</span><select aria-label="Motion action" value={motion.action} onChange={event => setMotion(previous => ({ ...previous, action: event.target.value as MotionAction }))}>
+              <option value="walk">Walk</option><option value="run">Run</option><option value="idle">Idle</option><option value="jump">Jump</option><option value="wave">Wave</option>
+            </select></label>
+            <div className="generator-fields">
+              <label className="generator-field"><span>Cycle (s)</span><input aria-label="Cycle duration" type="number" min={0.5} max={20} step={0.5} value={motion.duration} onChange={event => setMotion(previous => ({ ...previous, duration: Number(event.target.value) }))}/></label>
+              <label className="generator-field"><span>Repeats</span><input aria-label="Motion repeats" type="number" min={1} max={10} step={1} value={motion.repeats} onChange={event => setMotion(previous => ({ ...previous, repeats: Number(event.target.value) }))}/></label>
+            </div>
+            <label className="generator-field"><span>Intensity ({motion.intensity.toFixed(2)}×)</span><input aria-label="Motion intensity" type="range" min={0.25} max={2} step={0.05} value={motion.intensity} onChange={event => setMotion(previous => ({ ...previous, intensity: Number(event.target.value) }))}/></label>
+            <div className="generator-summary"><span>Clip length: {(motion.duration * motion.repeats).toFixed(1)} s</span><span>Walk and Run move forward</span></div>
+            <button className="generator-submit" disabled={!project.objects?.some(object => object.id === selectedObject && isCharacter(object))} type="submit"><Sparkles size={14}/>Generate motion</button>
+            <p className="preset-note">Replaces animation on the selected character. Undo with Ctrl/Cmd+Z.</p>
+          </form>}
+        </div>
         <div className="presets-grid">
           {presets.map(({ id, label, caption, Icon }) => <button className="preset-card" key={id} title={`Load ${label} preset (applies to selected character; Camera preset edits the camera)`} onClick={() => preset(id)}>
             <span className="preset-icon"><Icon size={17}/></span><span className="preset-label">{label}</span><span className="preset-subtitle">{caption}</span>

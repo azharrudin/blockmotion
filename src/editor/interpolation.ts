@@ -11,14 +11,22 @@ export function sampleTrack(keys: Keyframe[], time: number, interpolation: Inter
   if (!keys || keys.length === 0) return neutralPose(node);
   if (keys.length === 1 || time <= keys[0].time) return clonePose(keys[0].value);
   if (time >= keys[keys.length - 1].time) return clonePose(keys[keys.length - 1].value);
-  const next = keys.findIndex(k => k.time >= time);
+  let low = 1;
+  let high = keys.length - 1;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (keys[middle].time < time) low = middle + 1;
+    else high = middle;
+  }
+  const next = low;
   const a = keys[next - 1];
   const b = keys[next];
   if (time === b.time) return clonePose(b.value);
   const span = Math.max(0.000001, b.time - a.time);
   let t = clamp01((time - a.time) / span);
-  if (interpolation === 'step') t = 0;
-  if (interpolation === 'smooth') t = t * t * (3 - 2 * t);
+  const mode = a.interpolation ?? interpolation;
+  if (mode === 'step') t = 0;
+  if (mode === 'smooth') t = t * t * (3 - 2 * t);
   return {
     position: a.value.position.map((v, i) => mix(v, b.value.position[i], t)) as Vec3,
     rotation: a.value.rotation.map((v, i) => angleMix(v, b.value.rotation[i], t)) as Vec3,

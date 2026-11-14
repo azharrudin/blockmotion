@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { ArrowDownToLine, Camera, Check, ChevronDown, CircleHelp, Clapperboard, Code2, FilePlus2, FolderOpen, Keyboard, Layers3, Menu, MonitorPlay, MoreHorizontal, Redo2, Save, Square, Undo2, Video, X } from 'lucide-react';
 import { Explorer } from './components/Explorer';
 import { Inspector } from './components/Inspector';
@@ -34,7 +35,10 @@ function screenshot() {
 }
 
 export default function App() {
-  const { project, past, future, notification, undo, redo, flash } = useEditor();
+  const { project, past, future, notification, undo, redo, flash } = useEditor(useShallow(state => ({
+    project: state.project, past: state.past, future: state.future, notification: state.notification,
+    undo: state.undo, redo: state.redo, flash: state.flash,
+  })));
   const fileInput = useRef<HTMLInputElement>(null);
   const exportRef = useRef<HTMLDivElement>(null);
   const mediaRecorder = useRef<MediaRecorder | null>(null);

@@ -6,15 +6,30 @@ import { JOINT_IDS, type CameraCutView, type Tool, type Vec3 } from '../editor/t
 import { JOINT_POSITIONS, jointNodeId, resolveObjectNode } from '../editor/characters';
 import { characterNodes } from './CharacterAsset';
 import { sampleNodePose } from '../editor/tracks';
+import { sampleObjectPose, sampleTrack } from '../editor/interpolation';
 import { activeCameraCut, type CameraSnapshot } from '../editor/cameraCuts';
 import { SKY_PRESETS } from '../editor/sky';
 import type { SkySettings } from '../editor/types';
 import type { SceneObject } from '../editor/types';
 import { buildSceneAsset, disposeSceneAsset } from './SceneAssets';
+import { PreviewQuality, type PreviewMode, type PreviewStats } from './PreviewQuality';
 
 const deg = THREE.MathUtils.degToRad;
 const rad = THREE.MathUtils.radToDeg;
 const VECTOR = (v: Vec3) => new THREE.Vector3(v[0], v[1], v[2]);
+
+export function subscribeEditorControls(sync: () => void) {
+  return useEditor.subscribe((state, previous) => {
+    if (state.selection !== previous.selection
+      || state.selectedObject !== previous.selectedObject
+      || state.selectedJoint !== previous.selectedJoint
+      || state.tool !== previous.tool
+      || state.cameraPreview !== previous.cameraPreview
+      || state.gridSnap !== previous.gridSnap
+      || state.gridSize !== previous.gridSize
+      || state.project.objects !== previous.project.objects) sync();
+  });
+}
 
 export class StudioScene {
   private container: HTMLElement;
@@ -68,15 +83,21 @@ export class StudioScene {
   private resizeObserver: ResizeObserver;
   private raf = 0;
   private lastTime = performance.now();
+  private renderRequested = true;
+  private renderedState: ReturnType<typeof useEditor.getState> | undefined;
+  private previewQuality = new PreviewQuality();
+  private onPreviewStats?: (stats: PreviewStats) => void;
   private pointerDown = { x: 0, y: 0 };
   private draggingGizmo = false;
   private gizmoObject: string | null = null;
   private disposers: (() => void)[] = [];
+  private poseCache = new Map<string, { object: SceneObject; overrides: ReturnType<typeof useEditor.getState>['overrides']; interpolation: string; time: number }>();
 
-  constructor(container: HTMLElement) {
+  constructor(container: HTMLElement, onPreviewStats?: (stats: PreviewStats) => void) {
     this.container = container;
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, preserveDrawingBuffer: true });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    this.onPreviewStats = onPreviewStats;
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -88,6 +109,7 @@ export class StudioScene {
     this.editorCamera.position.set(6.1, 4.4, 8.9);
     this.editorCamera.lookAt(0, 1.75, 0);
     this.orbit = new OrbitControls(this.editorCamera, this.renderer.domElement);
+    this.orbit.addEventListener('change', () => { this.renderRequested = true; });
     this.orbit.target.set(0, 1.65, 0);
     this.orbit.enableDamping = true;
     this.orbit.dampingFactor = 0.075;
@@ -108,6 +130,7 @@ export class StudioScene {
     this.controls.setSpace('local');
     this.controlsHelper = this.controls.getHelper();
     this.scene.add(this.controlsHelper);
+    this.controls.addEventListener('change', () => { this.renderRequested = true; });
     this.controls.addEventListener('dragging-changed', event => {
       const dragging = Boolean(event.value);
       if (dragging) this.gizmoObject = useEditor.getState().selection;
@@ -139,7 +162,8 @@ export class StudioScene {
     this.scene.add(this.highlight);
     this.renderer.domElement.addEventListener('pointerdown', this.onPointerDown);
     this.renderer.domElement.addEventListener('pointerup', this.onPointerUp);
-    this.disposers.push(useEditor.subscribe(() => this.syncEditorControls()));
+    document.addEventListener('visibilitychange', this.resetFrameClock);
+    this.disposers.push(subscribeEditorControls(() => this.syncEditorControls()));
     this.resizeObserver = new ResizeObserver(this.resize);
     this.resizeObserver.observe(container);
     this.resize();
@@ -158,7 +182,7 @@ export class StudioScene {
     const key = this.keyLight;
     key.position.set(-3.5, 8, 5);
     key.castShadow = true;
-    key.shadow.mapSize.set(2048, 2048);
+    key.shadow.mapSize.set(1024, 1024);
     key.shadow.camera.left = -12;
     key.shadow.camera.right = 12;
     key.shadow.camera.top = 12;
@@ -222,6 +246,7 @@ export class StudioScene {
   };
 
   private resize = () => {
+    this.renderRequested = true;
     const width = Math.max(1, this.container.clientWidth);
     const height = Math.max(1, this.container.clientHeight);
     this.renderer.setSize(width, height, false);
@@ -291,6 +316,7 @@ export class StudioScene {
       this.scene.remove(node.root);
       disposeSceneAsset(node.root);
       this.assetNodes.delete(id);
+      this.poseCache?.delete(id);
     }
     for (const object of objects ?? []) {
       let node = this.assetNodes.get(object.id);
@@ -357,30 +383,76 @@ export class StudioScene {
 
   private applySceneObjectPoses() {
     const state = useEditor.getState();
+    const cache = this.poseCache ??= new Map();
     for (const object of state.project.objects ?? []) {
       const root = this.assetNodes.get(object.id)?.root;
       if (!root) continue;
-      const apply = (target: THREE.Object3D, id: string, base?: Vec3) => {
-        if (this.draggingGizmo && state.selection === id) return;
-        const pose = state.overrides[id] ?? sampleNodePose(state.project, id, state.time);
+      const previous = cache.get(object.id);
+      const animated = (object.keyframes?.length ?? 0) > 1
+        || JOINT_IDS.some(joint => (object.joints?.[joint]?.length ?? 0) > 1);
+      const dragging = this.draggingGizmo && state.selectedObject === object.id;
+      if (!dragging && previous?.object === object && previous.overrides === state.overrides
+        && previous.interpolation === state.project.interpolation && (!animated || previous.time === state.time)) continue;
+      const apply = (target: THREE.Object3D, pose: ReturnType<typeof sampleObjectPose>, base?: Vec3) => {
         target.position.set(...pose.position);
-        if (base) target.position.add(VECTOR(base));
-        target.rotation.set(...pose.rotation.map(deg) as Vec3);
+        if (base) {
+          target.position.x += base[0]; target.position.y += base[1]; target.position.z += base[2];
+        }
+        target.rotation.set(deg(pose.rotation[0]), deg(pose.rotation[1]), deg(pose.rotation[2]));
         target.scale.set(...pose.scale);
       };
-      apply(root, object.id);
+      if (!(this.draggingGizmo && state.selection === object.id)) {
+        apply(root, state.overrides[object.id] ?? sampleObjectPose(object, state.time, state.project.interpolation));
+      }
       const joints = characterNodes(root);
-      if (joints) for (const joint of JOINT_IDS) apply(joints[joint], jointNodeId(object.id, joint), JOINT_POSITIONS[joint]);
+      if (joints) for (const joint of JOINT_IDS) {
+        const id = jointNodeId(object.id, joint);
+        if (this.draggingGizmo && state.selection === id) continue;
+        apply(joints[joint], state.overrides[id] ?? sampleTrack(object.joints?.[joint] ?? [], state.time, state.project.interpolation, joint), JOINT_POSITIONS[joint]);
+      }
+      if (dragging) cache.delete(object.id);
+      else cache.set(object.id, { object, overrides: state.overrides, interpolation: state.project.interpolation, time: state.time });
     }
+  }
+
+  private resetFrameClock = () => { this.lastTime = performance.now(); };
+
+  setPreviewMode(mode: PreviewMode) {
+    this.previewQuality.setMode(mode);
+    this.applyPreviewQuality();
+  }
+
+  private applyPreviewQuality() {
+    const { scale, shadows } = this.previewQuality.settings;
+    const ratio = Math.min(window.devicePixelRatio || 1, 1) * scale;
+    if (this.renderer.getPixelRatio() !== ratio) this.renderer.setPixelRatio(ratio);
+    if (this.renderer.shadowMap.enabled !== shadows) {
+      this.renderer.shadowMap.enabled = shadows;
+      this.scene.traverse(node => {
+        if (!(node instanceof THREE.Mesh)) return;
+        const materials = Array.isArray(node.material) ? node.material : [node.material];
+        for (const material of materials) material.needsUpdate = true;
+      });
+    }
+    this.renderRequested = true;
   }
 
   private frame = (now: number) => {
     this.raf = requestAnimationFrame(this.frame);
-    const dt = Math.max(0, Math.min(0.05, (now - this.lastTime) / 1000));
+    // Keep playback at real speed even when a frame takes longer than 50 ms.
+    const dt = document.hidden ? 0 : Math.max(0, (now - this.lastTime) / 1000);
     this.lastTime = now;
     const store = useEditor.getState();
     if (store.playing) store.tick(dt);
     const state = useEditor.getState();
+    const cameraMoved = this.orbit.update();
+    if (!state.playing && !this.draggingGizmo && !cameraMoved
+      && !this.renderRequested && this.renderedState === state) {
+      this.previewQuality.observe(0, false);
+      return;
+    }
+    this.renderRequested = false;
+    this.renderedState = state;
     this.applySky(state.project.sky, state.project.palette.background);
     if (!(this.draggingGizmo && state.selection === 'camera')) {
       const pose = state.overrides.camera ?? sampleNodePose(state.project, 'camera', state.time);
@@ -390,17 +462,22 @@ export class StudioScene {
     }
     this.applySceneObjectPoses();
     this.shotCamera.updateMatrixWorld();
+    this.cameraHelper.visible = !state.cameraPreview && !state.playing;
+    this.controlsHelper.visible = !!this.controls.object && !state.cameraPreview && !state.playing;
     if (this.cameraHelper.visible) this.cameraHelper.update();
-    this.orbit.update();
-    const selected = this.selectedNode();
-    this.highlight.visible = !!selected && !!state.selectedObject && !state.cameraPreview;
+    const selected = state.playing ? undefined : this.selectedNode();
+    this.highlight.visible = !!selected && !!state.selectedObject && !state.cameraPreview && !state.playing;
     if (this.highlight.visible && selected) {
       this.highlight.setFromObject(selected);
-      this.highlight.update();
     }
     const camera = this.playbackCamera();
     this.skyDome.position.copy(camera.position);
     this.renderer.render(this.scene, camera);
+    const stats = this.previewQuality.observe(dt * 1000, !document.hidden && (state.playing || this.draggingGizmo || cameraMoved));
+    if (stats) {
+      this.applyPreviewQuality();
+      this.onPreviewStats?.(stats);
+    }
   };
 
   playbackCamera(): THREE.PerspectiveCamera {
@@ -417,7 +494,7 @@ export class StudioScene {
   }
 
   captureCutView(view: CameraCutView): CameraSnapshot | undefined {
-    if (view === 'shot') return undefined;
+    if (view === 'shot' || view === 'node') return undefined;
     let camera = this.playbackCamera();
     if (view !== 'current') {
       this.applySceneObjectPoses();
@@ -472,7 +549,11 @@ export class StudioScene {
     if (state.cameraPreview) state.setCameraPreview(false);
   }
 
-  screenshot(): string { return this.renderer.domElement.toDataURL('image/png'); }
+  screenshot(): string {
+    // Read synchronously after rendering so the GPU can discard buffers normally.
+    this.renderer.render(this.scene, this.playbackCamera());
+    return this.renderer.domElement.toDataURL('image/png');
+  }
   getCanvas(): HTMLCanvasElement { return this.renderer.domElement; }
   resetSelectedToNeutral() {
     const state = useEditor.getState();
@@ -486,6 +567,7 @@ export class StudioScene {
     this.resizeObserver.disconnect();
     this.renderer.domElement.removeEventListener('pointerdown', this.onPointerDown);
     this.renderer.domElement.removeEventListener('pointerup', this.onPointerUp);
+    document.removeEventListener('visibilitychange', this.resetFrameClock);
     this.disposers.forEach(dispose => dispose());
     this.controls.detach();
     this.controls.dispose();
