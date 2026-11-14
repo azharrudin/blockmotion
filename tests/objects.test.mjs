@@ -1,0 +1,141 @@
+import assert from 'node:assert/strict';
+import { build } from 'esbuild';
+
+// Bundle TypeScript in memory with the app's existing build dependency.
+const result = await build({
+  stdin: { contents: `export { useEditor, isValidProject, persistProject } from './src/editor/store';
+    export { createProject } from './src/editor/presets';
+    export { ASSET_CATALOG, MAX_OBJECTS } from './src/editor/assets';
+    export { buildSceneAsset, disposeSceneAsset } from './src/engine/SceneAssets';
+    export { StudioScene } from './src/engine/StudioScene';
+    export * as THREE from 'three';`, resolveDir: process.cwd() },
+  bundle: true, write: false, format: 'esm', platform: 'node',
+});
+const api = await import('data:text/javascript;base64,' + Buffer.from(result.outputFiles[0].text).toString('base64'));
+const { useEditor, isValidProject, persistProject, createProject, ASSET_CATALOG, MAX_OBJECTS, buildSceneAsset, disposeSceneAsset, StudioScene, THREE } = api;
+const state = () => useEditor.getState();
+const saved = new Map();
+globalThis.localStorage = { setItem: (k, v) => saved.set(k, v), getItem: k => saved.get(k) ?? null };
+const legacy = createProject('Legacy');
+assert.equal(isValidProject(legacy), true);
+state().loadProject(legacy);
+for (const kind of Object.keys(ASSET_CATALOG)) {
+  state().addObject(kind);
+  const object = state().project.objects.at(-1);
+  assert.equal(state().selectedObject, object.id);
+  assert.equal(isValidProject(state().project), true);
+  const root = buildSceneAsset(object);
+  const bounds = new THREE.Box3().setFromObject(root);
+  assert.equal(bounds.isEmpty(), false, kind);
+  assert.ok([...bounds.min.toArray(), ...bounds.max.toArray()].every(Number.isFinite), kind);
+  let disposed = 0;
+  let meshCount = 0;
+  let tinted = 0;
+  const materials = new Set();
+  root.traverse(child => {
+    if (!(child instanceof THREE.Mesh)) return;
+    meshCount++;
+    assert.equal(child.userData.objectId, object.id);
+    if (child.material.userData.tint) tinted++;
+    child.geometry.addEventListener('dispose', () => disposed++);
+    materials.add(child.material);
+  });
+  assert.ok(tinted > 0, `${kind} has editable primary color`);
+  let materialsDisposed = 0;
+  materials.forEach(m => m.addEventListener('dispose', () => materialsDisposed++));
+  disposeSceneAsset(root);
+  assert.equal(disposed, meshCount);
+  assert.equal(materialsDisposed, materials.size);
+}
+assert.equal(new Set(state().project.objects.map(o => o.id)).size, Object.keys(ASSET_CATALOG).length + 1);
+const beforeDrag = structuredClone(state().project);
+const pastCount = state().past.length;
+state().previewObjectPose({ position: [-2, 1, -4], rotation: [0, 45, 0], scale: [2, 2, 2] });
+assert.deepEqual(state().project, beforeDrag, 'drag preview is not persisted');
+assert.equal(state().past.length, pastCount);
+state().commitObjectPose();
+assert.equal(state().past.length, pastCount + 1, 'one undo entry per drag');
+const edited = structuredClone(state().project);
+state().undo();
+assert.deepEqual(state().project, beforeDrag);
+state().redo();
+assert.deepEqual(state().project, edited);
+const original = state().project.objects.at(-1);
+state().duplicateObject();
+const copy = state().project.objects.at(-1);
+assert.notEqual(copy.id, original.id);
+assert.notEqual(copy.pose, original.pose);
+assert.equal(copy.pose.position[0], original.pose.position[0] + 2);
+state().updateObject(copy.id, { name: 'My fence', color: '#aabbcc' });
+assert.equal(state().project.objects.at(-1).name, 'My fence');
+const beforeDelete = structuredClone(state().project);
+state().deleteObject();
+assert.equal(state().project.objects.some(o => o.id === copy.id), false);
+assert.equal(state().selectedObject, null);
+state().undo();
+assert.deepEqual(state().project, beforeDelete);
+state().redo();
+assert.equal(state().project.objects.some(o => o.id === copy.id), false);
+state().selectObject(original.id);
+const tracks = state().project.tracks;
+state().commitKey();
+assert.equal(state().project.tracks, tracks, 'props do not accidentally key the rig');
+state().selectObject(state().project.objects[0].id);
+state().preset('walk');
+assert.equal(state().project.objects.length, edited.objects.length);
+assert.equal(persistProject(state().project), true);
+const imported = JSON.parse(saved.get('blockmotion-studio-project-v1'));
+assert.equal(isValidProject(imported), true);
+state().loadProject(imported);
+assert.deepEqual(state().project.objects, imported.objects);
+for (const patch of [{ id: '__proto__' }, { kind: '__proto__' }, { name: '' }, { color: 'red' }, { pose: null }, { pose: { ...original.pose, scale: [0, 1, 1] } }, { pose: { ...original.pose, position: [NaN, 0, 0] } }]) {
+  assert.equal(isValidProject({ ...legacy, objects: [{ ...original, ...patch }] }), false);
+}
+assert.equal(isValidProject({ ...legacy, objects: [original, original] }), false);
+assert.equal(isValidProject({ ...legacy, objects: null }), false);
+const unchanged = state().project;
+state().selectObject(original.id);
+state().previewObjectPose({ ...original.pose, scale: [-1, 1, 1] });
+assert.equal(state().project, unchanged);
+
+// Exercise renderer reconciliation without requiring WebGL: actual Three.js scene,
+// geometry and disposal, with only the transform controls stubbed.
+const studio = Object.create(StudioScene.prototype);
+studio.scene = new THREE.Scene();
+studio.assetNodes = new Map();
+studio.controls = { object: null, detach() { this.object = null; } };
+studio.draggingGizmo = false;
+studio.syncSceneObjects();
+assert.equal(studio.assetNodes.size, imported.objects.length);
+const rendered = studio.assetNodes.get(original.id).root;
+state().selectObject(original.id);
+state().updateObject(original.id, { color: '#ff0000' });
+state().previewObjectPose({ position: [8, 2, -3], rotation: [0, 90, 0], scale: [2, 2, 2] });
+state().commitKey();
+studio.syncSceneObjects();
+assert.equal(studio.assetNodes.get(original.id).root, rendered, 'editing does not rebuild geometry');
+assert.deepEqual(rendered.position.toArray(), [8, 2, -3]);
+assert.equal(rendered.rotation.y, Math.PI / 2);
+rendered.traverse(child => { if (child.material?.userData.tint) assert.equal(child.material.color.getHexString(), 'ff0000'); });
+let removedGeometryDisposed = 0;
+rendered.traverse(child => { if (child.geometry) child.geometry.addEventListener('dispose', () => removedGeometryDisposed++); });
+studio.controls.object = rendered;
+state().deleteObject();
+studio.syncSceneObjects();
+assert.equal(studio.assetNodes.has(original.id), false);
+assert.equal(studio.scene.children.includes(rendered), false);
+assert.equal(studio.controls.object, null);
+assert.ok(removedGeometryDisposed > 0);
+state().undo();
+studio.syncSceneObjects();
+assert.equal(studio.assetNodes.has(original.id), true);
+state().loadProject({ ...legacy, objects: [] });
+studio.syncSceneObjects();
+assert.equal(studio.assetNodes.size, 0, 'loading legacy clears assets');
+for (let i = 0; i <= MAX_OBJECTS; i++) state().addObject('cube');
+assert.equal(state().project.objects.length, MAX_OBJECTS);
+assert.equal(isValidProject(state().project), true);
+state().newProject();
+assert.equal(state().selectedObject, state().project.objects[0].id);
+assert.equal(state().project.objects.length, 1);
+console.log(`PASS: ${Object.keys(ASSET_CATALOG).length} preset geometries, transforms, drag history, duplicate/delete/undo/redo, object limits, JSON validation, autosave, legacy projects, renderer reconciliation, and resource disposal.`);

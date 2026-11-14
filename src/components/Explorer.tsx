@@ -1,0 +1,73 @@
+import { Fragment, useEffect, useState } from 'react';
+import { Box, Camera, ChevronDown, ChevronRight, CircleHelp, Clapperboard, Eye, FolderOpen, Layers3, Lightbulb, PersonStanding, Trash2, Sparkles, Waves, Wind, Footprints, MoveUp, Film, RotateCcw } from 'lucide-react';
+import { useEditor } from '../editor/store';
+import { BONE_LABELS, JOINT_IDS } from '../editor/types';
+import type { PresetName } from '../editor/presets';
+import { AssetLibrary } from './AssetLibrary';
+
+import { isCharacter, jointNodeId } from '../editor/characters';
+const presets: { id: PresetName; label: string; caption: string; Icon: typeof Wind }[] = [
+  { id: 'wave', label: 'Wave', caption: 'Greeting', Icon: Waves },
+  { id: 'walk', label: 'Walk', caption: 'Looping', Icon: Footprints },
+  { id: 'jump', label: 'Jump', caption: 'Action', Icon: MoveUp },
+  { id: 'idle', label: 'Idle', caption: 'Breathing', Icon: Wind },
+  { id: 'cinematic', label: 'Camera', caption: 'Sequence', Icon: Film },
+];
+
+export function Explorer() {
+  const [hierarchyOpen, setHierarchyOpen] = useState(true);
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [presetOpen, setPresetOpen] = useState(true);
+  const { selection, selectedObject, selectedJoint, selectObject, deleteObject, select, preset, project, flash, resetCharacterPose, deleteAll } = useEditor();
+  useEffect(() => {
+    if (!selectedObject || !selectedJoint) return;
+    setCollapsed(previous => {
+      if (!previous.has(selectedObject)) return previous;
+      const next = new Set(previous); next.delete(selectedObject); return next;
+    });
+  }, [selection, selectedObject, selectedJoint]);
+  return <aside className="explorer left-panel">
+    <div className="panel-heading"><span className="panel-heading-title"><Layers3 size={15}/> EXPLORER</span><button title="About explorer" className="heading-action" onClick={() => flash('Select a joint to manipulate it in the viewport')}><CircleHelp size={14}/></button></div>
+    <div className="explorer-scroll">
+      <AssetLibrary/>
+      <div className="section-label with-action">SCENE HIERARCHY <button className="scene-clear-button" title="Delete all objects, characters, and keyframes" onClick={deleteAll}><Trash2 size={12}/> Delete all</button></div>
+      <div className="scene-tree">
+        <button className="tree-item tree-root" onClick={() => setHierarchyOpen(!hierarchyOpen)}>
+          {hierarchyOpen ? <ChevronDown size={14}/> : <ChevronRight size={14}/>}<FolderOpen size={15} className="tree-folder"/><span>Scene</span><span className="tree-meta">{3 + (project.objects?.length ?? 0)}</span>
+        </button>
+        {hierarchyOpen && <>
+          <button className={`tree-item tree-indent ${!selectedObject && selection === 'camera' ? 'is-selected' : ''}`} onClick={() => select('camera')}><span className="tree-spacer"/><Camera size={15} className="tree-camera"/><span>Shot Camera</span></button>
+          <div className="tree-item tree-indent static-item"><span className="tree-spacer"/><Lightbulb size={15} className="tree-light"/><span>Studio Lights</span><Eye size={12} className="tree-eye"/></div>
+          <div className="tree-item tree-indent static-item"><span className="tree-spacer"/><Box size={15} className="tree-muted"/><span>Stage</span><Eye size={12} className="tree-eye"/></div>
+          {(project.objects ?? []).map(object => <Fragment key={object.id}>
+            <div className={`object-tree-row ${selectedObject === object.id && !selectedJoint ? 'is-selected' : ''}`}>
+              {isCharacter(object) && <button className="object-expand" aria-label={`${collapsed.has(object.id) ? 'Expand' : 'Collapse'} ${object.name}`} aria-expanded={!collapsed.has(object.id)} onClick={() => setCollapsed(previous => { const next = new Set(previous); if (next.has(object.id)) next.delete(object.id); else next.add(object.id); return next; })}>{collapsed.has(object.id) ? <ChevronRight size={13}/> : <ChevronDown size={13}/>}</button>}
+              <button className="tree-item tree-indent" data-node-id={object.id} onClick={() => selectObject(object.id)} title={object.name}>{!isCharacter(object) && <span className="tree-spacer"/>}{isCharacter(object) ? <PersonStanding size={15} style={{ color: object.color }}/> : <Box size={15} style={{ color: object.color }}/>}<span className="object-tree-name">{object.name}</span></button>
+              <button className="object-tree-delete" title={`Delete ${object.name}`} onClick={() => { selectObject(object.id); deleteObject(); }}><Trash2 size={13}/></button>
+            </div>
+            {isCharacter(object) && !collapsed.has(object.id) && JOINT_IDS.map(joint => <button key={joint} data-node-id={jointNodeId(object.id, joint)} className={`tree-item tree-bone ${selection === jointNodeId(object.id, joint) ? 'is-selected' : ''}`} onClick={() => selectObject(object.id, joint)}><span className="tree-guideline"/><Box size={13}/><span>{BONE_LABELS[joint]}</span></button>)}
+          </Fragment>)}
+        </>}
+      </div>
+      <div className="sidebar-divider"/>
+      <div className="section-label with-action" role="button" tabIndex={0} onClick={() => setPresetOpen(!presetOpen)} onKeyDown={e => { if (e.key === 'Enter') setPresetOpen(!presetOpen); }}>
+        ANIMATION PRESETS {presetOpen ? <ChevronDown size={13}/> : <ChevronRight size={13}/>}
+      </div>
+      {presetOpen && <>
+        <p className="sidebar-copy">Select a character, then apply a motion and customize its joints.</p>
+        <div className="presets-grid">
+          {presets.map(({ id, label, caption, Icon }) => <button className="preset-card" key={id} title={`Load ${label} preset (applies to selected character; Camera preset edits the camera)`} onClick={() => preset(id)}>
+            <span className="preset-icon"><Icon size={17}/></span><span className="preset-label">{label}</span><span className="preset-subtitle">{caption}</span>
+          </button>)}
+          <button className="preset-card reset-card" disabled={!project.objects?.some(o => o.id === selectedObject && isCharacter(o))} title="Reset selected character joints to a neutral pose at the playhead" onClick={resetCharacterPose}><span className="preset-icon"><RotateCcw size={17}/></span><span className="preset-label">Reset pose</span><span className="preset-subtitle">Neutral joints</span></button>
+        </div>
+        <p className="preset-note"><Sparkles size={12}/> Motion presets apply to the selected character only. Camera applies to the shot camera. Undo with Ctrl+Z.</p>
+      </>}
+      <div className="sidebar-divider"/>
+      <div className="section-label">PROJECT ASSETS</div>
+      <div className="asset-entry"><Clapperboard size={14}/><span>{project.name}</span><span className="asset-ext">.anim</span></div>
+      <p className="preset-note">Add presets from the object library above. Select an object to edit, duplicate, or delete it.</p>
+    </div>
+    <div className="explorer-footer"><span className="status-dot"/> Local workspace <span className="footer-version">v1.0</span></div>
+  </aside>;
+}
