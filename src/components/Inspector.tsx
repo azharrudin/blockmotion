@@ -29,6 +29,7 @@ export function Inspector() {
   })));
   const sky = state.project.sky ?? SKY_PRESETS.studio;
   const object = state.project.objects?.find(o => o.id === state.selectedObject);
+  const nothingSelected = !state.selectedObject && state.selection !== 'camera';
   useEffect(() => { setTab('transform'); }, [state.selection]);
   const pose = currentPose();
   const uniformScale = pose.scale.every(value => Math.abs(value - pose.scale[0]) < 0.0001)
@@ -72,7 +73,10 @@ export function Inspector() {
         </button>
       </div>
       <div className="inspector-scroll">
-        {tab === 'transform' ? <>
+        {tab === 'transform' ? nothingSelected ? <div className="selection-summary">
+          <div className="selected-icon"><Box size={21}/></div>
+          <div><div className="selected-name">Nothing selected</div><div className="selected-type">Click an object in the viewport or scene tree</div></div>
+        </div> : <>
           <div className="selection-summary">
             <div className="selected-icon">{object ? <Box size={21}/> : <Camera size={21}/>}</div>
             <div><div className="selected-name">{label}</div><div className="selected-type">{state.selectedJoint ? `${object?.name} / Joint` : object ? ASSET_CATALOG[object.kind].label : 'Perspective camera'}</div></div>
@@ -295,17 +299,6 @@ export function Inspector() {
                 type="checkbox"
                 checked={state.looping}
                 onChange={(e) => state.setLooping(e.target.checked)}
-              />
-            </label>
-            <label className="switch-row">
-              <div>
-                <span>Preview shot camera</span>
-                <small>Render from cinematic camera</small>
-              </div>
-              <input
-                type="checkbox"
-                checked={state.cameraPreview}
-                onChange={(e) => state.setCameraPreview(e.target.checked)}
               />
             </label>
             <p className="inspector-help">

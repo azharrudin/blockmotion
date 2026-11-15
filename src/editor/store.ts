@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { createGeneratedMotion, createProject, createPreset, type MotionOptions, type PresetName } from './presets';
+import { createGeneratedMotion, createProject, createPreset, motionClipLength, motionEndTime, type MotionOptions, type PresetName } from './presets';
 import { isValidSky, SKY_PRESETS } from './sky';
 import { ASSET_CATALOG, MAX_OBJECTS, createSceneObject, isValidObjectPose, isValidSceneObject } from './assets';
 import { BONE_IDS, JOINT_IDS, clonePose, keyId, neutralPose, roundFrame, type AssetKind, type CameraCut, type CameraCutView, type JointId, type Keyframe, type Palette, type Pose, type Project, type SceneObject, type SkyPreset, type SkySettings, type Tool, type Tracks } from './types';
@@ -9,6 +9,7 @@ import { getTrack, nodeDefaultPose, replaceTrack, sampleNodePose, sortProjectTra
 import { GRID_SIZES } from './town';
 import { createEnvironmentPlan, materializeEnvironment, GENERATOR_LABELS, type GeneratorOptions } from './generators';
 import { CAMERA_CUT_LABELS, isValidCameraCuts, type CameraSnapshot } from './cameraCuts';
+import { activeCameraNodeId, cleanCameraReferences, hasCameraSequence, isCamera, sceneCameras } from './cameras';
 import { writePoseKey } from './keyframes';
 
 export type ClearKeyScope = 'node' | 'character' | 'project';
@@ -80,6 +81,7 @@ type State = {
   future: Project[];
   notification: string;
   select: (id: string) => void;
+  deselect: () => void;
   selectObject: (id: string, joint?: JointId) => void;
   addObject: (kind: AssetKind) => void;
   generateEnvironment: (options: GeneratorOptions) => string[];
@@ -98,7 +100,8 @@ type State = {
   setGridSnap: (value: boolean) => void;
   setGridSize: (value: number) => void;
   setCameraPreview: (value: boolean) => void;
-  addCameraCut: (view: CameraCutView, snapshot?: CameraSnapshot) => void;
+  setKeyEnabled: (node: string, id: string, enabled: boolean) => void;
+  addCameraCut: (view: CameraCutView, snapshot?: CameraSnapshot, cameraId?: string) => void;
   selectCameraCut: (id: string) => void;
   moveCameraCut: (id: string, time: number) => void;
   recaptureCameraCut: (id: string, snapshot: CameraSnapshot) => void;
@@ -140,14 +143,21 @@ export const useEditor = create<State>((set, get) => ({
   selectedJoint: null, objectPreview: null, selectedKey: null, selectedCut: null, time: 0,
   playing: false, looping: true, autoKey: true, tool: 'rotate', gridSnap: false, gridSize: 1, cameraPreview: false,
   overrides: {}, past: [], future: [], notification: '',
-  select: id => set(s => selectionPatch(s, id)),
+  select: id => set(s => {
+    const node = resolveObjectNode(s.project, id);
+    const camera = node && !node.joint && isCamera(node.object);
+    return { ...selectionPatch(s, id), ...(camera && { project: { ...s.project, activeCameraId: node.object.id } }) };
+  }),
   selectObject: (id, joint) => get().select(joint ? jointNodeId(id, joint) : id),
+  deselect: () => set({ selection: '', selectedObject: null, selectedJoint: null,
+    selectedKey: null, selectedCut: null, playing: false, ...clearedEdits }),
   addObject: kind => set(s => {
     const objects = s.project.objects ?? [];
     if (!Object.hasOwn(ASSET_CATALOG, kind)) return s;
     if (objects.length >= MAX_OBJECTS) return { notification: `Maximum ${MAX_OBJECTS} objects per scene` };
     const object = createSceneObject(kind, objects, s.gridSnap ? s.gridSize : undefined);
-    return { ...snapshot(s, { ...s.project, objects: [...objects, object] }), selection: object.id,
+    const camera = isCamera(object);
+    return { ...snapshot(s, { ...s.project, objects: [...objects, object], ...(camera && { activeCameraId: object.id }) }), selection: object.id,
       selectedObject: object.id, selectedJoint: null, objectPreview: null, tool: 'translate', cameraPreview: false, notification: `${object.name} added` };
   }),
   generateEnvironment: options => {
@@ -206,8 +216,12 @@ export const useEditor = create<State>((set, get) => ({
     const object = s.project.objects?.find(o => o.id === s.selectedObject);
     if (!object) return s;
     const overrides = Object.fromEntries(Object.entries(s.overrides).filter(([id]) => id !== object.id && !id.startsWith(`${object.id}:`)));
-    return { ...snapshot(s, { ...s.project, objects: s.project.objects!.filter(o => o.id !== object.id) }),
+    // Removes camera cuts whose camera node is gone and clears target references.
+    const project = cleanCameraReferences({ ...s.project, objects: s.project.objects!.filter(o => o.id !== object.id) });
+    const canPreview = sceneCameras(project).length > 0 || (project.cameraCuts?.length ?? 0) > 0;
+    return { ...snapshot(s, project),
       selection: 'camera', selectedObject: null, selectedJoint: null, objectPreview: null, overrides,
+      ...(s.cameraPreview && !canPreview && { cameraPreview: false }),
       notification: `${object.name} deleted — undo to restore` };
   }),
   setSelectedKey: selectedKey => set(s => {
@@ -224,25 +238,42 @@ export const useEditor = create<State>((set, get) => ({
       : { time: s.project.duration, playing: false };
     return { time: next };
   }),
-  play: playing => set(s => ({ playing: playing ?? !s.playing, selectedCut: null, time: s.time >= s.project.duration ? 0 : s.time, ...clearedEdits })),
+  play: playing => set(s => {
+    const next = playing ?? !s.playing;
+    return { playing: next, selectedCut: null, time: s.time >= s.project.duration ? 0 : s.time, ...clearedEdits };
+  }),
   setLooping: looping => set({ looping }), setAutoKey: autoKey => set({ autoKey }),
   setGridSnap: gridSnap => set({ gridSnap }),
   setGridSize: gridSize => { if ((GRID_SIZES as readonly number[]).includes(gridSize)) set({ gridSize }); },
-  setTool: tool => set({ tool }), setCameraPreview: cameraPreview => set({ cameraPreview }),
-  addCameraCut: (view, captured) => set(s => {
-    if (view !== 'shot' && (!captured || !isValidObjectPose(captured.pose))) return { notification: 'Capture a valid camera view first' };
+  setTool: tool => set({ tool }),
+  setCameraPreview: cameraPreview => set(s => !cameraPreview || hasCameraSequence(s.project)
+    ? { cameraPreview } : { notification: 'Add a camera or camera cut before using the camera view' }),
+  setKeyEnabled: (node, id, enabled) => set(s => {
+    const key = getTrack(s.project, node).find(k => k.id === id);
+    if (!key || (key.enabled !== false) === enabled) return s;
+    const keys = getTrack(s.project, node).map(k => k.id === id ? { ...k, enabled } : k);
+    return { ...snapshot(s, replaceTrack(s.project, node, keys)), selectedKey: { node, id },
+      notification: `Camera keyframe at ${key.time.toFixed(2)}s ${enabled ? 'activated' : 'deactivated'}` };
+  }),
+  addCameraCut: (view, captured, cameraId) => set(s => {
+    const nodeCamera = view === 'node'
+      ? s.project.objects?.find(o => o.id === (cameraId ?? activeCameraNodeId(s.project)) && isCamera(o)) : undefined;
+    if (view === 'node' && !nodeCamera) return { notification: 'Add a camera object before making a camera node cut' };
+    if (view !== 'shot' && view !== 'node' && (!captured || !isValidObjectPose(captured.pose))) return { notification: 'Capture a valid camera view first' };
     const time = Math.min(s.project.duration, roundFrame(s.time, s.project.fps));
     const cuts = [...s.project.cameraCuts ?? []];
     const index = cuts.findIndex(c => Math.abs(c.time - time) < 0.5 / s.project.fps);
     if (index < 0 && cuts.length >= 500) return { notification: 'Maximum 500 camera cuts' };
     const cut: CameraCut = { id: index >= 0 ? cuts[index].id : `cut_${keyId()}`, time, view,
-      ...(view !== 'shot' && captured ? { pose: clonePose(captured.pose), fov: captured.fov } : {}) };
+      ...(nodeCamera && { cameraId: nodeCamera.id }),
+      ...(view !== 'shot' && view !== 'node' && captured ? { pose: clonePose(captured.pose), fov: captured.fov } : {}) };
     if (!isValidCameraCuts([cut], s.project.duration)) return { notification: 'Choose a valid camera view before adding a cut' };
     if (index >= 0) cuts[index] = cut; else cuts.push(cut);
     cuts.sort((a,b) => a.time - b.time);
     const changed = JSON.stringify(cuts) !== JSON.stringify(s.project.cameraCuts ?? []);
+    const label = nodeCamera?.name ?? CAMERA_CUT_LABELS[view];
     return { ...(changed ? snapshot(s, { ...s.project, cameraCuts: cuts }) : {}), selectedCut: cut.id, selectedKey: null,
-      cameraPreview: true, notification: `${CAMERA_CUT_LABELS[view]} cut at ${time.toFixed(2)}s` };
+      cameraPreview: true, notification: `${label} cut at ${time.toFixed(2)}s` };
   }),
   selectCameraCut: id => set(s => {
     const cut = s.project.cameraCuts?.find(c => c.id === id);
@@ -375,19 +406,31 @@ export const useEditor = create<State>((set, get) => ({
     return isValidSky(sky) ? snapshot(s, { ...s.project, sky }) : s;
   }),
   preset: name => set(s => {
+    if (name === 'cinematic') {
+      const camera = s.project.objects?.find(o => o.id === s.selectedObject && isCamera(o))
+        ?? s.project.objects?.find(o => o.id === activeCameraNodeId(s.project) && isCamera(o))
+        ?? sceneCameras(s.project)[0];
+      if (!camera) return { notification: 'Add a camera object before loading the camera sequence preset' };
+      const project = { ...createPreset(name, s.project, camera.id), activeCameraId: camera.id };
+      return { ...snapshot(s, project), ...selectionPatch({ ...s, project }, camera.id), time: 0, playing: false, ...clearedEdits,
+        cameraPreview: true, notification: `Camera sequence preset loaded for ${camera.name}` };
+    }
     const target = s.project.objects?.find(o => o.id === s.selectedObject && isCharacter(o));
-    if (name !== 'cinematic' && !target) return { notification: 'Select a male or female character to apply a motion preset' };
-    const project = createPreset(name, s.project, target?.id);
-    const id = name === 'cinematic' ? 'camera' : target!.id;
-    return { ...snapshot(s, project), ...selectionPatch({ ...s, project }, id), time: 0, playing: false, ...clearedEdits,
-      cameraPreview: name === 'cinematic', notification: `${name[0].toUpperCase() + name.slice(1)} preset loaded${target && name !== 'cinematic' ? ` for ${target.name}` : ''}` };
+    if (!target) return { notification: 'Select a male or female character to apply a motion preset' };
+    const project = createPreset(name, s.project, target.id);
+    return { ...snapshot(s, project), ...selectionPatch({ ...s, project }, target.id), time: 0, playing: false, ...clearedEdits,
+      cameraPreview: false, notification: `${name[0].toUpperCase() + name.slice(1)} preset loaded for ${target.name}` };
   }),
   generateMotion: options => set(s => {
     const target = s.project.objects?.find(object => object.id === s.selectedObject && isCharacter(object));
     if (!target) return { notification: 'Select a character before generating motion' };
+    const adding = options.mode === 'add';
+    const start = adding ? motionEndTime(target) : 0;
+    const end = start + motionClipLength(options);
+    if (end > 600) return { notification: `Not enough timeline space: this clip would end at ${end.toFixed(1)} s (limit 600 s)` };
     const project = createGeneratedMotion(s.project, target.id, options);
-    return { ...snapshot(s, project), ...selectionPatch({ ...s, project }, target.id), time: 0, playing: false, ...clearedEdits,
-      cameraPreview: false, notification: `${options.action[0].toUpperCase() + options.action.slice(1)} motion generated for ${target.name}` };
+    return { ...snapshot(s, project), ...selectionPatch({ ...s, project }, target.id), time: start, playing: false, ...clearedEdits,
+      cameraPreview: false, notification: `${options.action[0].toUpperCase() + options.action.slice(1)} motion ${adding ? 'added after' : 'generated for'} ${target.name}` };
   }),
   newProject: () => set(s => {
     const project = createProject();

@@ -1,4 +1,4 @@
-import { BONE_IDS, JOINT_IDS, clonePose, keyId, neutralPose, type BoneId, type Palette, type Pose, type Project, type Tracks } from './types';
+import { BONE_IDS, JOINT_IDS, clonePose, keyId, neutralPose, type BoneId, type Keyframe, type Palette, type Pose, type Project, type SceneObject, type Tracks } from './types';
 
 import { createSceneObject } from './assets';
 import { isCharacter } from './characters';
@@ -27,7 +27,14 @@ export function createProject(name = 'Untitled animation'): Project {
 }
 export type PresetName = 'wave' | 'walk' | 'jump' | 'idle' | 'cinematic';
 export type MotionAction = 'walk' | 'run' | 'idle' | 'jump' | 'wave';
-export type MotionOptions = { action: MotionAction; duration: number; intensity: number; repeats: number };
+export type MotionMode = 'replace' | 'add';
+export type MotionOptions = { action: MotionAction; duration: number; intensity: number; repeats: number; direction?: number; mode?: MotionMode };
+export const motionEndTime = (object: SceneObject) => [
+  ...(object.keyframes ?? []),
+  ...Object.values(object.joints ?? {}).flatMap(keys => keys ?? []),
+].reduce((end, key) => Math.max(end, key.time), 0);
+export const motionClipLength = (options: MotionOptions) =>
+  Math.max(0.5, Math.min(20, options.duration)) * Math.max(1, Math.min(10, Math.round(options.repeats)));
 
 export function createGeneratedMotion(old: Project, targetId: string, options: MotionOptions): Project {
   const target = old.objects?.find(object => object.id === targetId && isCharacter(object));
@@ -36,8 +43,14 @@ export function createGeneratedMotion(old: Project, targetId: string, options: M
   const duration = Math.max(0.5, Math.min(20, options.duration));
   const intensity = Math.max(0.25, Math.min(2, options.intensity));
   const repeats = Math.max(1, Math.min(10, Math.round(options.repeats)));
+  const direction = Number.isFinite(options.direction) ? options.direction! : 0;
+  const mode: MotionMode = options.mode === 'add' ? 'add' : 'replace';
+  const startTime = mode === 'add' ? motionEndTime(target) : 0;
+  const base = sampleObjectPose(target, startTime, old.interpolation);
+  // Absolute heading: regenerating never inherits the previous clip's yaw.
+  const heading = direction * Math.PI / 180;
   const cycleSamples = 24;
-  const totalTime = duration * repeats;
+  const totalTime = motionClipLength(options);
   const tracks = emptyTracks();
   for (const id of BONE_IDS) tracks[id] = [];
 
@@ -54,7 +67,10 @@ export function createGeneratedMotion(old: Project, targetId: string, options: M
       const stride = (running ? 2 : 1.1) * intensity;
       const swing = (running ? 38 : 28) * intensity;
       root.position[1] = Math.abs(Math.sin(phase * Math.PI * 4)) * (running ? 0.12 : 0.055) * intensity;
-      root.position[2] = -progress * stride;
+      // Travel along the heading; the character keeps its own facing, so
+      // Backward becomes a true backward walk instead of a 180° turn.
+      root.position[0] = -progress * stride * Math.sin(heading);
+      root.position[2] = -progress * stride * Math.cos(heading);
       root.rotation[2] = wave * (running ? 3 : 1.5) * intensity;
       joints.leftLeg.rotation[0] = wave * swing;
       joints.rightLeg.rotation[0] = -wave * swing;
@@ -95,25 +111,32 @@ export function createGeneratedMotion(old: Project, targetId: string, options: M
   for (let cycle = 0; cycle < repeats; cycle++) {
     for (let step = cycle === 0 ? 0 : 1; step <= cycleSamples; step++) {
       const frame = sample(cycle, step);
-      const time = frame.progress * duration;
+      const time = startTime + frame.progress * duration;
       // These are samples of a continuous motion, so easing at every key causes stutter.
       tracks.root.push({ id: keyId(), time, value: clonePose(frame.root), interpolation: 'linear' });
       for (const joint of JOINT_IDS) tracks[joint].push({ id: keyId(), time, value: clonePose(frame.joints[joint]), interpolation: 'linear' });
     }
   }
 
-  const base = sampleObjectPose(target, 0, old.interpolation);
+  const rootKeys = tracks.root.map(keyframe => ({ ...keyframe, value: {
+    position: keyframe.value.position.map((value, i) => value + base.position[i]) as Pose['position'],
+    rotation: keyframe.value.rotation.map((value, i) => value + base.rotation[i]) as Pose['rotation'],
+    scale: [...base.scale] as Pose['scale'],
+  } }));
+  // Add mode preserves existing keys; when the new clip starts on an existing
+  // key its first sample is redundant (and duplicate times are invalid).
+  const mergeKeys = (existing: Keyframe[], added: Keyframe[]) => {
+    const times = new Set(existing.map(key => key.time));
+    return [...existing, ...added.filter(key => !times.has(key.time))].sort((a, b) => a.time - b.time);
+  };
   const objects = old.objects!.map(object => object.id !== target.id ? object : {
     ...object,
-    keyframes: tracks.root.map(keyframe => ({ ...keyframe, value: {
-      position: keyframe.value.position.map((value, i) => value + base.position[i]) as Pose['position'],
-      rotation: keyframe.value.rotation.map((value, i) => value + base.rotation[i]) as Pose['rotation'],
-      scale: [...base.scale] as Pose['scale'],
-    } })),
-    joints: Object.fromEntries(JOINT_IDS.map(joint => [joint, tracks[joint]])),
+    keyframes: mode === 'add' ? mergeKeys(object.keyframes ?? [], rootKeys) : rootKeys,
+    joints: Object.fromEntries(JOINT_IDS.map(joint => [joint,
+      mode === 'add' ? mergeKeys(object.joints?.[joint] ?? [], tracks[joint]) : tracks[joint]])),
   });
 
-  return { ...old, duration: Math.max(old.duration, totalTime), objects };
+  return { ...old, duration: Math.max(old.duration, startTime + totalTime), objects };
 }
 
 export function createPreset(name: PresetName, old: Project, targetId?: string): Project {

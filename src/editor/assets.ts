@@ -94,6 +94,7 @@ export function isValidObjectKeys(value: unknown, duration: number): boolean {
   const times = new Set<number>();
   for (const key of value) {
     if (key?.interpolation !== undefined && !['linear', 'smooth', 'step'].includes(key.interpolation)) return false;
+    if (key?.enabled !== undefined && typeof key.enabled !== 'boolean') return false;
     if (typeof key !== 'object' || key === null || typeof key.id !== 'string' || key.id.length === 0 || key.id.length > 100 || ids.has(key.id)) return false;
     if (typeof key.time !== 'number' || !Number.isFinite(key.time) || key.time < 0 || key.time > duration + 0.01 || times.has(key.time) || !isValidObjectPose(key.value)) return false;
     ids.add(key.id); times.add(key.time);

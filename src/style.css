@@ -31,3 +31,6 @@
 
 /* Keep animated canvas and playhead compositing inexpensive. */
 .viewport-top{flex-wrap:wrap;gap:8px}.snap-controls{margin-left:auto}.snap-controls select[aria-label="Preview quality"]{max-width:112px}.preview-fps{min-width:42px;font-size:10px;font-variant-numeric:tabular-nums;color:#c2d2eb}.ruler-playhead,.timeline-playhead-line{left:0;will-change:transform}.timeline-canvas{contain:layout paint}.keyframe-diamond{filter:none}
+
+/* Camera switch keyframes. */
+.key-enable{display:flex;align-items:center;gap:5px;color:#c8b8e6;font-size:10px;white-space:nowrap}.key-enable input{width:13px;height:13px;accent-color:#b69bdf;cursor:pointer}.keyframe-diamond.key-inactive{opacity:.32;border-style:dashed}

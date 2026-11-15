@@ -4,6 +4,11 @@ export const DEFAULT_CAMERA_SETTINGS: CameraSettings = { projection:'perspective
 export function isCamera(object: Pick<SceneObject,'kind'>): boolean { return object.kind==='camera'; }
 export function cameraSettings(object: SceneObject): CameraSettings { return {...DEFAULT_CAMERA_SETTINGS,...object.camera}; }
 export function sceneCameras(project: Pick<Project,'objects'>): SceneObject[] { return project.objects?.filter(isCamera)??[]; }
+/** True when the project has active camera keyframes or view cuts to play back. */
+export function hasCameraSequence(project: Pick<Project,'objects'|'cameraCuts'>): boolean {
+  return (project.cameraCuts?.length ?? 0) > 0
+    || sceneCameras(project).some(camera => (camera.keyframes ?? []).some(key => key.enabled !== false));
+}
 export function cameraNodeId(project: Project,id: string): string {
   return id==='camera' ? (sceneCameras(project).find(o=>o.id===project.activeCameraId)?.id??sceneCameras(project)[0]?.id??'scene') : id;
 }

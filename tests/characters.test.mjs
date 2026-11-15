@@ -94,9 +94,11 @@ for (const action of ['run', 'idle', 'jump', 'wave']) {
   assert.equal(obj(male).keyframes.at(-1).time, 2, `${action} uses the requested clip length`);
   assert.equal(isValidProject(s().project), true, `${action} produces valid keyframes`);
 }
-s().select('camera'); const charsBeforeCamera = structuredClone(s().project.objects); s().preset('cinematic');
-assert.deepEqual(s().project.objects, charsBeforeCamera, 'camera preset leaves all characters unchanged');
-assert.ok(s().project.tracks.camera.length > 1);
+s().select('camera'); const charsBeforeCamera = structuredClone(s().project.objects.filter(o => o.kind !== 'camera')); s().preset('cinematic');
+assert.deepEqual(s().project.objects.filter(o => o.kind !== 'camera'), charsBeforeCamera, 'camera preset leaves all characters unchanged');
+const cinematicCamera = s().project.objects.find(o => o.kind === 'camera');
+assert.ok(cinematicCamera.keyframes.length > 1, 'camera preset writes keyframes to the camera node');
+assert.equal(s().project.activeCameraId, cinematicCamera.id, 'camera preset makes its camera active');
 s().selectObject(female, 'head'); s().seek(4); s().previewObjectPose(pose([0, 80, 0])); s().commitKey();
 s().updateSetting({ duration: 2 }); assert.ok(obj(female).joints.head.every(k => k.time <= 2)); s().undo();
 assert.ok(obj(female).joints.head.some(k => k.time === 4));

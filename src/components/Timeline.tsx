@@ -6,7 +6,7 @@ import { JOINT_IDS } from '../editor/types';
 import { isCharacter, jointNodeId } from '../editor/characters';
 import { timelineTracks } from '../editor/tracks';
 import { CameraCuts } from './CameraCuts';
-import { CAMERA_CUT_LABELS, activeCameraCut } from '../editor/cameraCuts';
+import { cameraCutLabel, resolveCameraView } from '../editor/cameraCuts';
 import { KeyframeActions } from './KeyframeActions';
 
 const clock = (time: number) => {
@@ -58,8 +58,14 @@ export function Timeline() {
   const moving = useRef<{ node: string; id: string } | null>(null);
   const tracks = useMemo(() => timelineTracks(s.project), [s.project]);
   const cuts = s.project.cameraCuts ?? [];
+  const selectedCameraKey = s.selectedKey && s.project.objects?.some(o => o.id === s.selectedKey!.node && o.kind === 'camera')
+    ? tracks.find(track => track.id === s.selectedKey!.node)?.keys.find(key => key.id === s.selectedKey!.id) ?? null : null;
   const movingCut = useRef<string | null>(null);
-  const playingCut = useEditor(state => state.cameraPreview ? activeCameraCut(state.project.cameraCuts, state.time) : undefined);
+  const playingCutId = useEditor(state => {
+    if (!state.cameraPreview) return null;
+    const resolved = resolveCameraView(state.project, state.time);
+    return resolved?.kind === 'cut' ? resolved.cut.id : null;
+  });
   const contents = useRef<HTMLDivElement>(null);
   const selectedTrack = s.selectedCut ?? s.selection;
   useEffect(() => {
@@ -93,7 +99,7 @@ export function Timeline() {
     state.select(id); state.setSelectedKey(null); state.seek(timeAtPointer(e.currentTarget, e.clientX, duration, s.project.fps));
   }}>
     <div className="track-grid-lines">{Array.from({length:TICKS+1}, (_, i) => <span key={i} style={{left:`${i*100/TICKS}%`}}/>)}</div>
-    {keys.map(k => <button key={k.id} className={`keyframe-diamond ${s.selectedKey?.node === id && s.selectedKey.id === k.id ? 'selected' : ''}`} style={{left:`${(k.time / duration) * 100}%`}} title={`${title} @ ${k.time.toFixed(2)}s — drag to move`} onPointerDown={e => { e.stopPropagation(); moving.current = {node:id,id:k.id}; e.currentTarget.setPointerCapture(e.pointerId); }} onClick={e => e.stopPropagation()} onPointerUp={e => {
+    {keys.map(k => <button key={k.id} className={`keyframe-diamond ${k.enabled === false ? 'key-inactive' : ''} ${s.selectedKey?.node === id && s.selectedKey.id === k.id ? 'selected' : ''}`} style={{left:`${(k.time / duration) * 100}%`}} title={`${title} @ ${k.time.toFixed(2)}s${k.enabled === false ? ' — inactive camera switch' : ''} — drag to move`} onPointerDown={e => { e.stopPropagation(); moving.current = {node:id,id:k.id}; e.currentTarget.setPointerCapture(e.pointerId); }} onClick={e => e.stopPropagation()} onPointerUp={e => {
       e.stopPropagation();
       const start = moving.current;
       moving.current = null;
@@ -131,9 +137,12 @@ export function Timeline() {
       <button title="Insert keyframe on selected track (K)" onClick={() => s.commitKey()}><Plus size={13}/> Keyframe</button>
       <button title="Insert keyframes for the selected character and its joints" disabled={!character} onClick={allPose}><KeyRound size={13}/> Key pose</button>
       <button title="Delete selected keyframe" disabled={!s.selectedKey} onClick={() => s.deleteKey()}><Trash2 size={13}/></button>
+      {s.selectedKey && selectedCameraKey && <label className="key-enable" title="Use this camera keyframe as a camera switch point">
+        <input type="checkbox" checked={selectedCameraKey.enabled !== false} onChange={e => s.setKeyEnabled(s.selectedKey!.node, selectedCameraKey.id, e.target.checked)}/> Camera switch
+      </label>}
       <KeyframeActions/>
       <span className="track-actions-spacer"/>
-      <span className="timeline-instruction">Click ruler to scrub · click diamond to select</span>
+      <span className="timeline-instruction">Click ruler to scrub · click diamond to select · Esc deselects</span>
       <ChevronUp size={14} className="muted"/>
     </div>
     <div className="timeline-contents" ref={contents}>
@@ -147,10 +156,10 @@ export function Timeline() {
           {Array.from({length:TICKS+1}, (_, i) => <div className="tick-label" key={i} style={{left: `${i*100/TICKS}%`}}>{(duration*i/TICKS).toFixed(1)}s</div>)}
           <div className="ruler-playhead" ref={rulerPlayhead}/>
         </div>
-        <div className="timeline-grid">
+        <div className="timeline-grid" onClick={e => { if (e.target === e.currentTarget) s.deselect(); }}>
           <div className={`track-row camera-cut-row ${s.selectedCut?'active':''}`} onClick={e=>s.seek(toTime(e.currentTarget,e.clientX))}>
             <div className="track-grid-lines">{Array.from({length:TICKS+1},(_,i)=><span key={i} style={{left:`${i*100/TICKS}%`}}/>)}</div>
-            {cuts.map(cut=><button key={cut.id} data-cut-id={cut.id} className={`keyframe-diamond camera-cut-diamond ${s.selectedCut===cut.id?'selected':''} ${s.cameraPreview&&playingCut?.id===cut.id?'playing-cut':''}`} style={{left:percent(cut.time)}} title={`${CAMERA_CUT_LABELS[cut.view]} @ ${cut.time.toFixed(2)}s — drag to move cut`}
+            {cuts.map(cut=><button key={cut.id} data-cut-id={cut.id} className={`keyframe-diamond camera-cut-diamond ${s.selectedCut===cut.id?'selected':''} ${playingCutId===cut.id?'playing-cut':''}`} style={{left:percent(cut.time)}} title={`${cameraCutLabel(s.project, cut)} @ ${cut.time.toFixed(2)}s — drag to move cut`}
               onClick={e=>e.stopPropagation()} onPointerDown={e=>{e.stopPropagation();movingCut.current=cut.id;e.currentTarget.setPointerCapture(e.pointerId);}}
               onPointerUp={e=>{e.stopPropagation();const id=movingCut.current;movingCut.current=null;if(!id)return;const row=e.currentTarget.parentElement;if(!row)return;const time=toTime(row,e.clientX);if(Math.abs(time-cut.time)>0.5/s.project.fps)s.moveCameraCut(id,time);else s.selectCameraCut(id);}}><Camera size={12}/></button>)}
           </div>

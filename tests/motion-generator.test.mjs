@@ -89,6 +89,45 @@ for (const action of ['walk', 'run', 'idle', 'jump', 'wave']) {
   state().undo();
 }
 
+// Direction changes the travel path and keeps the character facing that way.
+state().generateMotion({ action: 'walk', duration: 1, intensity: 1, repeats: 1, direction: 90 });
+const directedEnd = object(characterId).keyframes.at(-1).value;
+assert.ok(Math.abs(directedEnd.position[0] + 1.1) < 1e-9, '90° walks toward -X');
+assert.ok(Math.abs(directedEnd.position[2]) < 1e-9, '90° has no forward (-Z) travel');
+assert.equal(directedEnd.rotation[1], 0, 'direction steers travel without rotating the character');
+assert.equal(isValidProject(state().project), true);
+state().undo();
+
+// Regenerating must not accumulate the previous clip's yaw.
+for (const direction of [0, 180, 0]) state().generateMotion({ action: 'walk', duration: 1, intensity: 1, repeats: 1, direction });
+const reforward = object(characterId).keyframes.at(-1).value;
+assert.ok(Math.abs(reforward.position[2] + 1.1) < 1e-9, 'forward after backward still walks forward');
+assert.equal(reforward.rotation[1], 0, 'forward after backward faces forward');
+state().undo();
+state().undo();
+state().undo();
+
+// Add mode appends a clip and preserves the existing tracks instead of replacing them.
+state().generateMotion({ action: 'wave', duration: 1, intensity: 1, repeats: 1 });
+const waveObject = object(characterId);
+const waveProject = structuredClone(state().project);
+const waveEnd = waveObject.keyframes.at(-1).time;
+const waveRootIds = waveObject.keyframes.map(key => key.id);
+const waveJointCount = waveObject.joints.leftArm.length;
+assert.equal(waveEnd, 1);
+state().generateMotion({ action: 'idle', duration: 1, intensity: 1, repeats: 1, mode: 'add' });
+const added = object(characterId);
+assert.deepEqual(waveRootIds.filter(id => added.keyframes.some(key => key.id === id)), waveRootIds, 'existing root keys survive');
+assert.ok(added.joints.leftArm.length > waveJointCount, 'new joint keys are appended');
+assert.equal(added.keyframes.at(-1).time, 2, 'clip starts at the previous animation end');
+assert.equal(new Set(added.keyframes.map(key => key.time)).size, added.keyframes.length, 'no duplicate key times');
+assert.equal(isValidProject(state().project), true, 'added motion stays valid');
+assert.equal(state().time, waveEnd, 'playhead jumps to the added clip');
+assert.deepEqual(sampleObjectPose(added, waveEnd, state().project.interpolation), sampleObjectPose(waveObject, waveEnd, state().project.interpolation), 'pose is continuous at the join');
+state().undo();
+assert.deepEqual(state().project, waveProject);
+state().undo();
+
 state().setTool('rotate');
 let controlSyncs = 0;
 const unsubscribe = subscribeEditorControls(() => controlSyncs++);

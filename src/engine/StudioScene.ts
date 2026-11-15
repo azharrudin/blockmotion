@@ -7,7 +7,8 @@ import { JOINT_POSITIONS, jointNodeId, resolveObjectNode } from '../editor/chara
 import { characterNodes } from './CharacterAsset';
 import { sampleNodePose } from '../editor/tracks';
 import { sampleObjectPose, sampleTrack } from '../editor/interpolation';
-import { activeCameraCut, type CameraSnapshot } from '../editor/cameraCuts';
+import { resolveCameraView, type CameraSnapshot } from '../editor/cameraCuts';
+import { cameraSettings, isCamera } from '../editor/cameras';
 import { SKY_PRESETS } from '../editor/sky';
 import type { SkySettings } from '../editor/types';
 import type { SceneObject } from '../editor/types';
@@ -243,6 +244,7 @@ export class StudioScene {
     ], true);
     const hit = hits[0];
     if (hit?.object.userData.objectId) useEditor.getState().selectObject(hit.object.userData.objectId, hit.object.userData.jointId);
+    else useEditor.getState().deselect();
   };
 
   private resize = () => {
@@ -483,8 +485,32 @@ export class StudioScene {
   playbackCamera(): THREE.PerspectiveCamera {
     const state = useEditor.getState();
     if (!state.cameraPreview) return this.editorCamera;
-    const cut = activeCameraCut(state.project.cameraCuts, state.time);
-    if (!cut || cut.view === 'shot' || !cut.pose) return this.shotCamera;
+    const resolved = resolveCameraView(state.project, state.time);
+    if (resolved?.kind === 'node') {
+      const pose = sampleNodePose(state.project, resolved.camera.id, state.time);
+      this.cutCamera.position.set(...pose.position);
+      this.cutCamera.rotation.set(...pose.rotation.map(deg) as Vec3);
+      this.cutCamera.scale.set(...pose.scale);
+      const fov = cameraSettings(resolved.camera).fov;
+      if (this.cutCamera.fov !== fov) { this.cutCamera.fov = fov; this.cutCamera.updateProjectionMatrix(); }
+      this.cutCamera.updateMatrixWorld();
+      return this.cutCamera;
+    }
+    const cut = resolved?.kind === 'cut' ? resolved.cut : null;
+    if (!cut || cut.view === 'shot') return this.shotCamera;
+    if (cut.view === 'node') {
+      const camera = state.project.objects?.find(o => isCamera(o) && o.id === cut.cameraId);
+      if (!camera) return this.shotCamera;
+      const pose = sampleNodePose(state.project, camera.id, state.time);
+      this.cutCamera.position.set(...pose.position);
+      this.cutCamera.rotation.set(...pose.rotation.map(deg) as Vec3);
+      this.cutCamera.scale.set(...pose.scale);
+      const fov = cameraSettings(camera).fov;
+      if (this.cutCamera.fov !== fov) { this.cutCamera.fov = fov; this.cutCamera.updateProjectionMatrix(); }
+      this.cutCamera.updateMatrixWorld();
+      return this.cutCamera;
+    }
+    if (!cut.pose) return this.shotCamera;
     this.cutCamera.position.set(...cut.pose.position);
     this.cutCamera.rotation.set(...cut.pose.rotation.map(deg) as Vec3);
     this.cutCamera.scale.set(...cut.pose.scale);

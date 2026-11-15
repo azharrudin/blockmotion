@@ -1,6 +1,6 @@
 import { memo, useEffect, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { Copy, Focus, RotateCcw, Trash2 } from 'lucide-react';
+import { Copy, Focus, RotateCcw, Trash2, X } from 'lucide-react';
 import type { SceneObject } from '../editor/types';
 import { useEditor } from '../editor/store';
 import { isCharacter } from '../editor/characters';
@@ -27,6 +27,7 @@ export const ObjectProperties = memo(function ObjectProperties({ object }: { obj
     <div className="object-actions">
       <button onClick={() => studioRef.current?.focusSelected()}><Focus size={14}/> Focus</button>
       <button onClick={state.duplicateObject}><Copy size={14}/> Duplicate</button>
+      <button onClick={state.deselect}><X size={14}/> Deselect</button>
       <button className="danger" onClick={state.deleteObject}><Trash2 size={14}/> {character ? 'Delete character' : 'Delete'}</button>
     </div>
     <div className="object-actions animation-actions">

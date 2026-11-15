@@ -6,7 +6,7 @@ import type { AssetKind } from '../editor/types';
 import { useEditor } from '../editor/store';
 import { studioRef } from './Viewport';
 
-const CATEGORIES = ['All', 'Characters', 'Nature', 'Town', 'Primitives'];
+const CATEGORIES = ['All', 'Cameras', 'Characters', 'Nature', 'Town', 'Primitives'];
 const TOWN_SECTIONS = ['All Town', 'Roads', 'Street props', 'Transport', 'Buildings', 'Park', 'Details'];
 export function AssetLibrary() {
   const [open, setOpen] = useState(false);

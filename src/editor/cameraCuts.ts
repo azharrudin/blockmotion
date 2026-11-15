@@ -1,5 +1,6 @@
 import { isValidObjectPose } from './assets';
-import type { CameraCut, CameraCutView, Pose } from './types';
+import { sceneCameras } from './cameras';
+import type { CameraCut, CameraCutView, Pose, Project, SceneObject } from './types';
 
 export type CameraSnapshot = { pose: Pose; fov: number };
 export const CAMERA_CUT_LABELS: Record<CameraCutView, string> = {
@@ -31,4 +32,29 @@ export function activeCameraCut(cuts: CameraCut[] | undefined, time: number): Ca
 
 export function cameraCutLabel(project: import('./types').Project,cut: CameraCut): string {
   return cut.view==='node' ? project.objects?.find(o=>o.kind==='camera'&&o.id===cut.cameraId)?.name??'Missing camera' : CAMERA_CUT_LABELS[cut.view];
+}
+
+export type ResolvedCamera =
+  | { kind: 'node'; camera: SceneObject; time: number }
+  | { kind: 'cut'; cut: CameraCut; time: number };
+
+/**
+ * Resolve the camera that drives the viewport at `time`.
+ * Every active keyframe on a camera track is a switch point. Camera nodes and
+ * view cuts compete on the same timeline; on the same frame the camera node wins.
+ * Camera order breaks ties, so the first camera in the scene owns frame 0.
+ */
+export function resolveCameraView(project: Project, time: number): ResolvedCamera | null {
+  if (!Number.isFinite(time)) return null;
+  let best: { camera: SceneObject; time: number; order: number } | null = null;
+  sceneCameras(project).forEach((camera, order) => {
+    let latest = -Infinity;
+    for (const key of camera.keyframes ?? []) if (key.enabled !== false && key.time <= time && key.time > latest) latest = key.time;
+    if (latest === -Infinity) return;
+    if (!best || latest > best.time || (latest === best.time && order < best.order)) best = { camera, time: latest, order };
+  });
+  const cut = activeCameraCut(project.cameraCuts, time);
+  const node = best as { camera: SceneObject; time: number; order: number } | null;
+  if (node && (!cut || node.time >= cut.time)) return { kind: 'node', camera: node.camera, time: node.time };
+  return cut ? { kind: 'cut', cut, time: cut.time } : null;
 }

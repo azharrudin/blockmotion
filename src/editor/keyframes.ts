@@ -9,8 +9,9 @@ export function writePoseKey(project: Project, node: string, value: Pose, playhe
   const index = keys.findIndex(k => Math.abs(k.time - time) < 0.5 / project.fps);
   if (index < 0 && keys.length >= 5000) return undefined;
   const interpolation = index >= 0 ? keys[index].interpolation : undefined;
+  const enabled = index >= 0 ? keys[index].enabled : undefined;
   const frame = { id: index >= 0 ? keys[index].id : keyId(), time, value: clonePose(value),
-    ...(interpolation && { interpolation }) };
+    ...(interpolation && { interpolation }), ...(enabled !== undefined && { enabled }) };
   if (index >= 0 && JSON.stringify(keys[index]) === JSON.stringify(frame)) return { project, frame };
   if (index >= 0) keys[index] = frame; else keys.push(frame);
   keys.sort((a, b) => a.time - b.time);

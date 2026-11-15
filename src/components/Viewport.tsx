@@ -3,7 +3,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { Camera, Eye, Focus, Grid3X3, Maximize2, Move, RotateCw, Scaling, Video, VideoOff } from 'lucide-react';
 import { StudioScene } from '../engine/StudioScene';
 import { useEditor } from '../editor/store';
-import { CAMERA_CUT_LABELS, activeCameraCut } from '../editor/cameraCuts';
+import { cameraCutLabel, resolveCameraView } from '../editor/cameraCuts';
 import { GRID_SIZES } from '../editor/town';
 import { BONE_LABELS } from '../editor/types';
 import type { Tool } from '../editor/types';
@@ -27,8 +27,14 @@ export function Viewport() {
     selection: state.selection, selectedObject: state.selectedObject, selectedJoint: state.selectedJoint,
     project: state.project, gridSnap: state.gridSnap, gridSize: state.gridSize, setGridSnap: state.setGridSnap, setGridSize: state.setGridSize,
   })));
-  const activeCut = useEditor(state => state.cameraPreview ? activeCameraCut(state.project.cameraCuts, state.time) : undefined);
-  const cameraLabel = cameraPreview ? activeCut ? `CUT / ${CAMERA_CUT_LABELS[activeCut.view].toUpperCase()}` : 'SHOT CAMERA' : 'PERSPECTIVE';
+  const cameraLabel = useEditor(state => {
+    if (!state.cameraPreview) return 'PERSPECTIVE';
+    const resolved = resolveCameraView(state.project, state.time);
+    if (resolved?.kind === 'node') return `CAM / ${resolved.camera.name.toUpperCase()}`;
+    if (resolved?.kind === 'cut') return `CUT / ${cameraCutLabel(state.project, resolved.cut).toUpperCase()}`;
+    const shot = state.project.objects?.find(object => object.kind === 'camera' && object.id === state.project.activeCameraId);
+    return shot ? `SHOT / ${shot.name.toUpperCase()}` : 'SHOT CAMERA';
+  });
   useEffect(() => {
     if (!mount.current) return;
     const studio = new StudioScene(mount.current, setPreviewStats);
@@ -60,14 +66,14 @@ export function Viewport() {
         ))}
         <span className="vertical-separator"/>
         <button className="icon-tool" title="Focus selected object" onClick={() => studioRef.current?.focusSelected()}><Focus size={17}/></button>
-        <button className={`icon-tool ${cameraPreview ? 'active' : ''}`} title="Toggle shot camera preview (C)" onClick={() => setCameraPreview(!cameraPreview)}>{cameraPreview ? <Video size={17}/> : <VideoOff size={17}/>}</button>
+        <button className={`icon-tool ${cameraPreview ? 'active' : ''}`} title="Toggle camera sequence view (C)" onClick={() => setCameraPreview(!cameraPreview)}>{cameraPreview ? <Video size={17}/> : <VideoOff size={17}/>}</button>
         <button className="icon-tool" title="Reset editor view" onClick={() => studioRef.current?.setView('perspective')}><Focus size={17}/></button>
       </div>
       <div className="viewport-gizmo-label"><span className="axis x">X</span><span className="axis y">Y</span><span className="axis z">Z</span></div>
       <div className="viewport-bottom">
         <div className="viewport-hint"><span className="hint-mouse">◉</span> Orbit: Drag <span className="hint-separator">•</span> Pan: Right drag <span className="hint-separator">•</span> Zoom: Scroll</div>
         <div className="viewport-bottom-right">
-          <button className="small-overlay-btn" title="Look through shot camera" onClick={() => setCameraPreview(!cameraPreview)}><Camera size={13}/> {cameraPreview ? 'Exit camera' : 'Camera view'}</button>
+          <button className="small-overlay-btn" title="Toggle camera sequence view" onClick={() => setCameraPreview(!cameraPreview)}><Camera size={13}/> {cameraPreview ? 'Perspective view' : 'Camera view'}</button>
           <div className="relative">
             <button className="small-overlay-btn" onClick={() => setViewOpen(!viewOpen)} title="Change viewport angle"><Eye size={13}/> Views ⌄</button>
             {viewOpen && <div className="view-menu">
@@ -77,7 +83,7 @@ export function Viewport() {
           <button className="small-overlay-btn icon-only" title="Reset camera framing" onClick={() => studioRef.current?.setView('perspective')}><Maximize2 size={13}/></button>
         </div>
       </div>
-      <div className="scene-watermark"><span className="watermark-subtitle">SCENE / {project.name.toUpperCase()}</span><span>{selectedObject ? `${project.objects?.find(o => o.id === selectedObject)?.name}${selectedJoint ? ` / ${BONE_LABELS[selectedJoint]}` : ''}` : selection === 'camera' ? 'Cinematic camera selected' : 'Procedural R6 rig · No external assets'}</span></div>
+      <div className="scene-watermark"><span className="watermark-subtitle">SCENE / {project.name.toUpperCase()}</span><span>{selectedObject ? `${project.objects?.find(o => o.id === selectedObject)?.name}${selectedJoint ? ` / ${BONE_LABELS[selectedJoint]}` : ''}` : selection === 'camera' ? 'Cinematic camera selected' : 'Nothing selected'}</span></div>
     </section>
   );
 }
