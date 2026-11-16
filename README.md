@@ -20,17 +20,66 @@ npm run preview
 
 The `dist/` directory can be published as a static site (Netlify, Vercel, GitHub Pages with correct base, etc.). **No backend is required**.
 
+## Deploy with GitHub Actions to cPanel
+
+`.github/workflows/deploy.yml` typechecks and builds on GitHub using Node.js 22,
+and uploads `dist/` over SSH on every push to `main`. You can also run **Actions →
+Deploy to cPanel → Run workflow** on `main`. The hosting account needs SSH access
+and `rsync`; it does not need Node.js for this workflow.
+
+In the GitHub repository, open **Settings → Secrets and variables → Actions**.
+Add these repository **Secrets**:
+
+| Secret | Value |
+| --- | --- |
+| `CPANEL_HOST` | SSH hostname, without `https://` or a path |
+| `CPANEL_USER` | cPanel SSH username |
+| `CPANEL_SSH_KEY` | Complete private key for deployment, without a passphrase |
+| `CPANEL_KNOWN_HOSTS` | Verified SSH host key entries for the host and port |
+
+Authorize the matching public key in **cPanel → SSH Access → Manage SSH Keys**.
+Keep the private key in GitHub Secrets. For `CPANEL_KNOWN_HOSTS`, collect entries
+using `ssh-keyscan -p 22 YOUR_HOST` (substitute the SSH port), compare their
+fingerprints with those supplied by your host, and save the verified entries.
+For a nonstandard port the entries use `[YOUR_HOST]:PORT` as the hostname.
+
+Add these repository **Variables** in the same settings page:
+
+| Variable | Value |
+| --- | --- |
+| `CPANEL_DEPLOY_PATH` | Required absolute directory, e.g. `/home/USERNAME/public_html/blockmotion` |
+| `CPANEL_SSH_PORT` | Optional; defaults to `22` |
+| `VITE_BASE_PATH` | Optional; defaults to `/blockmotion/`. Use `/` when served at a domain or subdomain root. |
+
+The defaults match a site at `https://YOUR_DOMAIN/blockmotion/`. Match the deploy
+directory and base URL to the actual document root. Deployment paths must contain
+only letters, numbers, underscores, dots, slashes, or hyphens, without `..` segments.
+The workflow uploads assets before `index.html` and keeps existing destination
+files, including older hashed assets. It overwrites matching filenames.
+
+Commit and push the workflow and application files after configuring the secrets
+and variables. Use this workflow as an alternative to cPanel's **Deploy HEAD
+Commit**; it uploads built files directly and does not use `.cpanel.yml` or the
+server's Git checkout. Avoid running both deployment methods for the same site.
+
+The deployment gate is `npm run build`, which includes TypeScript checks. It does
+not run `npm test`: the current suite fails the camera object's nonempty geometry
+assertion in `tests/objects.test.mjs`. Restore a test gate after repairing the suite.
+
+See [GitHub's continuous deployment documentation](https://docs.github.com/en/actions/get-started/continuous-deployment).
+
 ## Deploy with cPanel Git Version Control
 
 The root `.cpanel.yml` installs dependencies, builds the app, and copies only the
-contents of `dist/` to `$HOME/public_html`. It copies files only after a successful
+contents of `dist/` to the `DEPLOYPATH` configured in that file (currently
+`$HOME/public_html/blockmotion`). It copies files only after a successful
 build and leaves unrelated files in the destination in place. Existing files with
 matching names (including `index.html`) are overwritten.
 
 1. Keep the cPanel Git checkout outside the public document root, for example
    `/home/USERNAME/repositories/blockmotion-studio`.
 2. Check the domain's document root in cPanel. Edit `DEPLOYPATH` in `.cpanel.yml`
-   if it differs from `/home/USERNAME/public_html`.
+   if it differs from `/home/USERNAME/public_html/blockmotion`.
 3. Ensure Node.js 20.19+ or 22.12+ and npm are available in the deployment task's
    `PATH`. Some hosts require adding their Node.js binary directory to `PATH` in
    `.cpanel.yml`; ask the host for that path. A browser-only app still needs Node.js

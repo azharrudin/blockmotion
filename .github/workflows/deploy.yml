@@ -1,0 +1,86 @@
+name: Deploy to cPanel
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cpanel-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --include=dev
+
+      - name: Build
+        env:
+          VITE_BASE_PATH: ${{ vars.VITE_BASE_PATH || '/blockmotion/' }}
+        run: npm run build -- --base "$VITE_BASE_PATH"
+
+      - name: Upload static site over SSH
+        shell: bash
+        env:
+          CPANEL_HOST: ${{ secrets.CPANEL_HOST }}
+          CPANEL_USER: ${{ secrets.CPANEL_USER }}
+          CPANEL_SSH_KEY: ${{ secrets.CPANEL_SSH_KEY }}
+          CPANEL_KNOWN_HOSTS: ${{ secrets.CPANEL_KNOWN_HOSTS }}
+          CPANEL_SSH_PORT: ${{ vars.CPANEL_SSH_PORT || '22' }}
+          CPANEL_DEPLOY_PATH: ${{ vars.CPANEL_DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          : "${CPANEL_HOST:?Set the CPANEL_HOST secret}"
+          : "${CPANEL_USER:?Set the CPANEL_USER secret}"
+          : "${CPANEL_SSH_KEY:?Set the CPANEL_SSH_KEY secret}"
+          : "${CPANEL_KNOWN_HOSTS:?Set the CPANEL_KNOWN_HOSTS secret}"
+          : "${CPANEL_DEPLOY_PATH:?Set the CPANEL_DEPLOY_PATH variable}"
+          [[ "$CPANEL_HOST" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]]
+          [[ "$CPANEL_USER" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_-]*$ ]]
+          [[ "$CPANEL_SSH_PORT" =~ ^[0-9]+$ ]]
+          [[ "$CPANEL_DEPLOY_PATH" =~ ^/[a-zA-Z0-9_./-]+$ ]]
+          [[ "/${CPANEL_DEPLOY_PATH#/}/" != *'/../'* ]]
+          [[ "$CPANEL_DEPLOY_PATH" != '/' ]]
+
+          ssh_dir=$(mktemp -d "$RUNNER_TEMP/cpanel-ssh.XXXXXX")
+          trap 'rm -rf "$ssh_dir"' EXIT
+          chmod 700 "$ssh_dir"
+          printf '%s\n' "$CPANEL_SSH_KEY" > "$ssh_dir/key"
+          printf '%s\n' "$CPANEL_KNOWN_HOSTS" > "$ssh_dir/known_hosts"
+          chmod 600 "$ssh_dir/key" "$ssh_dir/known_hosts"
+          cat > "$ssh_dir/config" <<EOF
+          Host cpanel-deploy
+            HostName $CPANEL_HOST
+            User $CPANEL_USER
+            Port $CPANEL_SSH_PORT
+            IdentityFile "$ssh_dir/key"
+            UserKnownHostsFile "$ssh_dir/known_hosts"
+            StrictHostKeyChecking yes
+            IdentitiesOnly yes
+            BatchMode yes
+            ConnectTimeout 30
+          EOF
+          chmod 600 "$ssh_dir/config"
+          ssh -F "$ssh_dir/config" cpanel-deploy "mkdir -p -- '$CPANEL_DEPLOY_PATH'"
+          # Publish assets before the HTML that references them. Keep older assets
+          # available for visitors with an already-open editor.
+          rsync -rz --delay-updates --exclude '/index.html' \
+            -e "ssh -F '$ssh_dir/config'" dist/ "cpanel-deploy:$CPANEL_DEPLOY_PATH/"
+          rsync -z -e "ssh -F '$ssh_dir/config'" \
+            dist/index.html "cpanel-deploy:$CPANEL_DEPLOY_PATH/index.html"
