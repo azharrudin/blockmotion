@@ -25,9 +25,25 @@ export type TownAssetKind = 'roadCurve' | 'roadT' | 'sidewalk' | 'sidewalkCorner
 export type TerrainConfig = { biome: 'grass' | 'mountains' | 'jungle' | 'desert'; size: number; height: number; seed: number };
 export type RoadGridConfig = { columns: number; rows: number; blockSize: 18 };
 export type CameraSettings = { projection: 'perspective' | 'orthographic'; fov: number; orthoSize: number; targetId: string | null; followOffset: Vec3; lookAtTarget: boolean };
-export type AssetKind = 'camera' | 'terrain' | 'jungleTree' | 'palm' | 'cactus' | 'roadNetwork' | TownAssetKind | 'cube' | 'sphere' | 'cylinder' | 'plane' | 'r6Male' | 'r6Female' | 'tree' | 'pine' | 'bush' | 'rock' | 'road' | 'intersection' | 'store' | 'house' | 'bench' | 'streetlight' | 'fence';
+export type AssetKind = 'camera' | 'terrain' | 'jungleTree' | 'palm' | 'cactus' | 'roadNetwork' | TownAssetKind | 'cube' | 'sphere' | 'cylinder' | 'plane' | 'r6Male' | 'r6Female' | 'tree' | 'pine' | 'bush' | 'rock' | 'road' | 'intersection' | 'store' | 'house' | 'bench' | 'streetlight' | 'fence' | 'script' | 'imported';
+export type ImportedModel = { name: string; data: string; format: 'glb' | 'gltf' };
+export type WeldKey = {
+  id: string;
+  time: number;
+  /** null means detached from here on. */
+  targetId: string | null;
+  joint?: JointId | null;
+  /** Pose relative to the target node; required while welded. */
+  offset?: Pose;
+};
 export type SceneObject = {
   id: string; kind: AssetKind; name: string; color: string; pose: Pose; keyframes?: Keyframe[];
+  /** Script objects: user-authored Three.js code returning an Object3D. */
+  script?: string;
+  /** Weld timeline: latest key at or before the playhead wins. */
+  welds?: WeldKey[];
+  /** Imported objects: embedded GLB/GLTF data URL. */
+  model?: ImportedModel;
   joints?: Partial<Record<JointId, Keyframe[]>>;
   camera?: CameraSettings;
   terrain?: TerrainConfig;

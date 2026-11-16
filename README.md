@@ -20,6 +20,49 @@ npm run preview
 
 The `dist/` directory can be published as a static site (Netlify, Vercel, GitHub Pages with correct base, etc.). **No backend is required**.
 
+## Deploy with cPanel Git Version Control
+
+The root `.cpanel.yml` installs dependencies, builds the app, and copies only the
+contents of `dist/` to `$HOME/public_html`. It copies files only after a successful
+build and leaves unrelated files in the destination in place. Existing files with
+matching names (including `index.html`) are overwritten.
+
+1. Keep the cPanel Git checkout outside the public document root, for example
+   `/home/USERNAME/repositories/blockmotion-studio`.
+2. Check the domain's document root in cPanel. Edit `DEPLOYPATH` in `.cpanel.yml`
+   if it differs from `/home/USERNAME/public_html`.
+3. Ensure Node.js 20.19+ or 22.12+ and npm are available in the deployment task's
+   `PATH`. Some hosts require adding their Node.js binary directory to `PATH` in
+   `.cpanel.yml`; ask the host for that path. A browser-only app still needs Node.js
+   on the server to build using this configuration.
+4. Review and commit the deployment files and all application changes you intend
+   to publish, then push to the remote branch cPanel follows. Include new source
+   files required by those changes. Keep `dist/` and `node_modules/` ignored.
+5. In **Git Version Control → Manage → Pull or Deploy**, select **Update from
+   Remote**, then **Deploy HEAD Commit**.
+
+If cPanel reports **The system cannot deploy**, check the repository on the
+**cPanel server** (its working tree is separate from your local checkout):
+
+```bash
+git status --short
+git ls-files .cpanel.yml
+```
+
+The first command must print nothing; the second must print `.cpanel.yml`.
+Back up and review any server-side changes, then commit intentional changes or
+move unintended files outside the checkout before updating from the remote.
+Do not discard server changes without reviewing them. A local commit alone does
+not clean up a modified server checkout.
+
+This configuration assumes the app is served at the domain root. For a subdirectory
+such as `/studio/`, set Vite's `base` to `/studio/` in `vite.config.ts` and deploy to
+that subdirectory. If the host cannot run Node.js, build locally with
+`npm ci --include=dev && npm run build` and upload the contents of `dist/` to the
+domain's document root using cPanel File Manager instead.
+
+See [cPanel's deployment setup guide](https://docs.cpanel.net/knowledge-base/web-services/guide-to-git-set-up-deployment/).
+
 ## What's included
 
 - A Three.js WebGL viewport with grid, shadows, orbit controls, raycaster-based click selection, transform gizmos, and front/side/top views.

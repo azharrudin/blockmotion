@@ -1,16 +1,17 @@
 import { create } from 'zustand';
 import { createGeneratedMotion, createProject, createPreset, motionClipLength, motionEndTime, type MotionOptions, type PresetName } from './presets';
 import { isValidSky, SKY_PRESETS } from './sky';
-import { ASSET_CATALOG, MAX_OBJECTS, createSceneObject, isValidObjectPose, isValidSceneObject } from './assets';
-import { BONE_IDS, JOINT_IDS, clonePose, keyId, neutralPose, roundFrame, type AssetKind, type CameraCut, type CameraCutView, type JointId, type Keyframe, type Palette, type Pose, type Project, type SceneObject, type SkyPreset, type SkySettings, type Tool, type Tracks } from './types';
-import { isCharacter, jointNodeId, resolveObjectNode } from './characters';
+import { ASSET_CATALOG, MAX_MODEL_DATA, MAX_OBJECTS, MAX_SCRIPT_LENGTH, createSceneObject, isValidImportedModel, isValidObjectPose, isValidSceneObject } from './assets';
+import { BONE_IDS, BONE_LABELS, JOINT_IDS, clonePose, keyId, neutralPose, roundFrame, type AssetKind, type CameraCut, type CameraCutView, type CameraSettings, type ImportedModel, type JointId, type Keyframe, type Palette, type Pose, type Project, type SceneObject, type SkyPreset, type SkySettings, type Tool, type Tracks, type WeldKey } from './types';
+import { isCharacter, isJointId, jointNodeId, resolveObjectNode } from './characters';
 import { getTrack, nodeDefaultPose, replaceTrack, sampleNodePose, sortProjectTracks, timelineTracks } from './tracks';
 
 import { GRID_SIZES } from './town';
 import { createEnvironmentPlan, materializeEnvironment, GENERATOR_LABELS, type GeneratorOptions } from './generators';
 import { CAMERA_CUT_LABELS, isValidCameraCuts, type CameraSnapshot } from './cameraCuts';
-import { activeCameraNodeId, cleanCameraReferences, hasCameraSequence, isCamera, sceneCameras } from './cameras';
+import { activeCameraNodeId, cameraSettings, cleanCameraReferences, hasCameraSequence, isCamera, isValidCameraSettings, sceneCameras } from './cameras';
 import { writePoseKey } from './keyframes';
+import { cleanWeldReferences, relativeOffset, targetNodeWorldPose, weldedWorldPose } from './attachments';
 
 export type ClearKeyScope = 'node' | 'character' | 'project';
 
@@ -50,9 +51,19 @@ function initialProject(): Project {
     const json = localStorage.getItem(STORAGE_KEY);
     const data: unknown = json && JSON.parse(json);
     if (isValidProject(data)) return sortProjectTracks(data);
+    // Drop objects whose preset no longer exists (for example removed features)
+    // instead of discarding the whole saved project.
+    const salvaged = salvageProject(data);
+    if (isValidProject(salvaged)) return sortProjectTracks(salvaged);
   } catch { /* Private browsing or corrupt storage */ }
   const project = createProject('My first animation');
   return createPreset('wave', project, project.objects![0].id);
+}
+function salvageProject(value: unknown): unknown {
+  if (!isRecord(value) || !Array.isArray(value.objects)) return value;
+  const objects = value.objects.filter(object =>
+    isRecord(object) && typeof object.kind === 'string' && Object.hasOwn(ASSET_CATALOG, object.kind));
+  return objects.length === value.objects.length ? value : { ...value, objects };
 }
 export function persistProject(project: Project): boolean {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(project)); return true; }
@@ -84,8 +95,15 @@ type State = {
   deselect: () => void;
   selectObject: (id: string, joint?: JointId) => void;
   addObject: (kind: AssetKind) => void;
+  addImportedModel: (model: ImportedModel, name?: string) => void;
+  updateScript: (id: string, script: string) => void;
+  weldObject: (id: string, targetId: string, joint?: JointId | null) => void;
+  detachObject: (id: string) => void;
+  updateWeldOffset: (id: string, weldId: string, offset: Pose) => void;
+  deleteWeld: (id: string, weldId: string) => void;
   generateEnvironment: (options: GeneratorOptions) => string[];
   updateObject: (id: string, data: Partial<Pick<SceneObject, 'name' | 'color' | 'skinColor' | 'pantsColor'>>) => void;
+  updateCamera: (id: string, data: Partial<CameraSettings>) => void;
   previewObjectPose: (pose: Pose) => void;
   commitObjectPose: () => void;
   duplicateObject: () => void;
@@ -152,6 +170,7 @@ export const useEditor = create<State>((set, get) => ({
   deselect: () => set({ selection: '', selectedObject: null, selectedJoint: null,
     selectedKey: null, selectedCut: null, playing: false, ...clearedEdits }),
   addObject: kind => set(s => {
+    if (kind === 'imported') return { notification: 'Use Import 3D model to add a model file' };
     const objects = s.project.objects ?? [];
     if (!Object.hasOwn(ASSET_CATALOG, kind)) return s;
     if (objects.length >= MAX_OBJECTS) return { notification: `Maximum ${MAX_OBJECTS} objects per scene` };
@@ -159,6 +178,83 @@ export const useEditor = create<State>((set, get) => ({
     const camera = isCamera(object);
     return { ...snapshot(s, { ...s.project, objects: [...objects, object], ...(camera && { activeCameraId: object.id }) }), selection: object.id,
       selectedObject: object.id, selectedJoint: null, objectPreview: null, tool: 'translate', cameraPreview: false, notification: `${object.name} added` };
+  }),
+  addImportedModel: (model, name) => set(s => {
+    const objects = s.project.objects ?? [];
+    if (objects.length >= MAX_OBJECTS) return { notification: `Maximum ${MAX_OBJECTS} objects per scene` };
+    const label = (name ?? model.name).trim().slice(0, 60) || 'Imported model';
+    const next = { ...model, name: label };
+    if (!isValidImportedModel(next) || next.data.length > MAX_MODEL_DATA) return { notification: 'Model is invalid or exceeds the size limit' };
+    let unique = label, suffix = 2;
+    while (objects.some(o => o.name === unique)) unique = `${label.slice(0, 55)} ${suffix++}`;
+    const base = createSceneObject('imported', objects, s.gridSnap ? s.gridSize : undefined);
+    const object: SceneObject = { ...base, name: unique, model: { ...next, name: unique.slice(0, 60) } };
+    return { ...snapshot(s, { ...s.project, objects: [...objects, object] }), selection: object.id,
+      selectedObject: object.id, selectedJoint: null, objectPreview: null, tool: 'translate', cameraPreview: false,
+      notification: `${unique} imported` };
+  }),
+  updateScript: (id, script) => set(s => {
+    const object = s.project.objects?.find(o => o.id === id && o.kind === 'script');
+    if (!object || script === object.script || script.trim().length === 0 || script.length > MAX_SCRIPT_LENGTH) return s;
+    try { new Function('THREE', script); } catch { return { notification: 'Script has a syntax error' }; }
+    const next: SceneObject = { ...object, script };
+    if (!isValidSceneObject(next, s.project.duration)) return s;
+    return { ...snapshot(s, { ...s.project, objects: s.project.objects!.map(o => o.id === id ? next : o) }), notification: 'Script applied' };
+  }),
+  weldObject: (id, targetId, joint) => set(s => {
+    const object = s.project.objects?.find(o => o.id === id);
+    const target = s.project.objects?.find(o => o.id === targetId);
+    if (!object || !target || object.id === target.id) return { notification: 'Choose a valid weld target' };
+    if (joint && (!isCharacter(target) || !isJointId(joint))) return { notification: 'That target has no such joint' };
+    const time = Math.min(s.project.duration, roundFrame(s.time, s.project.fps));
+    const targetWorld = targetNodeWorldPose(s.project, target, joint ?? null, time);
+    const objectWorld = weldedWorldPose(s.project, object, time) ?? s.overrides[id] ?? sampleNodePose(s.project, id, time);
+    const offset = relativeOffset(targetWorld, objectWorld);
+    if (!isValidObjectPose(offset)) return { notification: 'Could not capture the weld offset' };
+    const welds = [...object.welds ?? []];
+    const index = welds.findIndex(weld => Math.abs(weld.time - time) < 0.5 / s.project.fps);
+    const weld: WeldKey = { id: index >= 0 ? welds[index].id : `weld_${keyId()}`, time, targetId: target.id, ...(joint && { joint }), offset };
+    if (index >= 0) welds[index] = weld; else welds.push(weld);
+    welds.sort((a, b) => a.time - b.time);
+    return { ...snapshot(s, { ...s.project, objects: s.project.objects!.map(o => o.id === id ? { ...o, welds } : o) }),
+      notification: `${object.name} welded to ${target.name}${joint ? ` / ${BONE_LABELS[joint]}` : ''}` };
+  }),
+  detachObject: id => set(s => {
+    const object = s.project.objects?.find(o => o.id === id);
+    if (!object) return s;
+    const time = Math.min(s.project.duration, roundFrame(s.time, s.project.fps));
+    const welded = weldedWorldPose(s.project, object, time);
+    if (!welded && !(object.welds?.length)) return { notification: `${object.name} is not welded` };
+    let project = s.project;
+    if (welded) {
+      const result = writePoseKey(project, id, welded, time);
+      if (!result) return { notification: 'Maximum keyframes per track — detach was not applied' };
+      project = result.project;
+    }
+    const current = project.objects?.find(o => o.id === id) ?? object;
+    const welds = [...current.welds ?? []];
+    const index = welds.findIndex(weld => Math.abs(weld.time - time) < 0.5 / s.project.fps);
+    const weld: WeldKey = { id: index >= 0 ? welds[index].id : `weld_${keyId()}`, time, targetId: null };
+    if (index >= 0) welds[index] = weld; else welds.push(weld);
+    welds.sort((a, b) => a.time - b.time);
+    const next = { ...project, objects: project.objects!.map(o => o.id === id ? { ...o, welds } : o) };
+    return { ...snapshot(s, next), selectedKey: null,
+      notification: welded ? `${object.name} detached — pose keyed at ${time.toFixed(2)}s` : `${object.name} detached` };
+  }),
+  updateWeldOffset: (id, weldId, offset) => set(s => {
+    if (!isValidObjectPose(offset)) return s;
+    const object = s.project.objects?.find(o => o.id === id);
+    if (!object?.welds?.some(weld => weld.id === weldId && weld.targetId)) return s;
+    const welds = object.welds.map(weld => weld.id === weldId ? { ...weld, offset: clonePose(offset) } : weld);
+    return snapshot(s, { ...s.project, objects: s.project.objects!.map(o => o.id === id ? { ...o, welds } : o) });
+  }),
+  deleteWeld: (id, weldId) => set(s => {
+    const object = s.project.objects?.find(o => o.id === id);
+    if (!object?.welds?.some(weld => weld.id === weldId)) return s;
+    const welds = object.welds.filter(weld => weld.id !== weldId);
+    const next: SceneObject = { ...object, welds };
+    if (!isValidSceneObject(next, s.project.duration)) return s;
+    return snapshot(s, { ...s.project, objects: s.project.objects!.map(o => o.id === id ? next : o) });
   }),
   generateEnvironment: options => {
     const state = get();
@@ -186,6 +282,14 @@ export const useEditor = create<State>((set, get) => ({
     const object = { ...original, ...data };
     if (!isValidSceneObject(object, s.project.duration) || JSON.stringify(object) === JSON.stringify(original)) return s;
     return snapshot(s, { ...s.project, objects: s.project.objects!.map(o => o.id === id ? object : o) });
+  }),
+  updateCamera: (id, data) => set(s => {
+    const camera = s.project.objects?.find(o => o.id === id && isCamera(o));
+    if (!camera) return s;
+    const next = { ...cameraSettings(camera), ...data };
+    if (!isValidCameraSettings(next) || JSON.stringify(next) === JSON.stringify(cameraSettings(camera))) return s;
+    return { ...snapshot(s, { ...s.project, objects: s.project.objects!.map(o => o.id === id ? { ...o, camera: next } : o) }),
+      notification: next.targetId ? `${camera.name} follows ${s.project.objects?.find(o => o.id === next.targetId)?.name ?? 'target'}` : `${camera.name} follow disabled` };
   }),
   updatePose: (id, value) => set(s => {
     if ((id !== 'camera' && !resolveObjectNode(s.project, id)) || !isValidObjectPose(value)) return s;
@@ -217,7 +321,7 @@ export const useEditor = create<State>((set, get) => ({
     if (!object) return s;
     const overrides = Object.fromEntries(Object.entries(s.overrides).filter(([id]) => id !== object.id && !id.startsWith(`${object.id}:`)));
     // Removes camera cuts whose camera node is gone and clears target references.
-    const project = cleanCameraReferences({ ...s.project, objects: s.project.objects!.filter(o => o.id !== object.id) });
+    const project = cleanWeldReferences(cleanCameraReferences({ ...s.project, objects: s.project.objects!.filter(o => o.id !== object.id) }));
     const canPreview = sceneCameras(project).length > 0 || (project.cameraCuts?.length ?? 0) > 0;
     return { ...snapshot(s, project),
       selection: 'camera', selectedObject: null, selectedJoint: null, objectPreview: null, overrides,
@@ -341,8 +445,13 @@ export const useEditor = create<State>((set, get) => ({
     const ids = scope === 'project' ? timelineTracks(s.project).map(t => t.id)
       : scope === 'character' ? [owner!.id, ...JOINT_IDS.map(j => jointNodeId(owner!.id, j))] : [s.selection];
     const targets = new Set(ids);
-    const count = ids.reduce((n, id) => n + getTrack(s.project, id).length, 0) + (scope === 'project' ? s.project.cameraCuts?.length ?? 0 : 0);
-    let project = scope === 'project' && s.project.cameraCuts?.length ? { ...s.project, cameraCuts: [] } : s.project;
+    const weldCount = scope === 'project' ? s.project.objects?.reduce((n, object) => n + (object.welds?.length ?? 0), 0) ?? 0 : 0;
+    const count = ids.reduce((n, id) => n + getTrack(s.project, id).length, 0) + (scope === 'project' ? (s.project.cameraCuts?.length ?? 0) + weldCount : 0);
+    let project = s.project;
+    if (scope === 'project' && ((project.cameraCuts?.length ?? 0) > 0 || (project.objects?.some(object => object.welds?.length) ?? false))) {
+      project = { ...project, cameraCuts: [],
+        objects: project.objects?.map(object => object.welds?.length ? { ...object, welds: [] } : object) };
+    }
     for (const id of ids) if (getTrack(project, id).length) project = replaceTrack(project, id, []);
     const overrides = Object.fromEntries(Object.entries(s.overrides).filter(([id]) => !targets.has(id)));
     return { ...(project !== s.project ? snapshot(s, project) : {}), overrides, selectedKey: null,
@@ -394,7 +503,9 @@ export const useEditor = create<State>((set, get) => ({
     const trim = (keys: Keyframe[]) => keys.filter(k => k.time <= duration + 0.00001);
     const tracks = data.duration === undefined ? s.project.tracks : Object.fromEntries(BONE_IDS.map(id => [id, trim(s.project.tracks[id])])) as Tracks;
     const objects = data.duration === undefined ? s.project.objects : s.project.objects?.map(o => ({ ...o,
-      ...(o.keyframes && { keyframes: trim(o.keyframes) }), ...(o.joints && { joints: Object.fromEntries(Object.entries(o.joints).map(([id, keys]) => [id, trim(keys)])) }) }));
+      ...(o.keyframes && { keyframes: trim(o.keyframes) }),
+      ...(o.joints && { joints: Object.fromEntries(Object.entries(o.joints).map(([id, keys]) => [id, trim(keys)])) }),
+      ...(o.welds && { welds: o.welds.filter(weld => weld.time <= duration + 0.00001) }) }));
     const cameraCuts = s.project.cameraCuts?.filter(c => c.time <= duration);
     return { ...snapshot(s, { ...s.project, ...data, tracks, objects, ...(cameraCuts && { cameraCuts }) }), time: Math.min(s.time, duration), ...clearedEdits };
   }),

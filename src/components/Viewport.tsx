@@ -67,7 +67,7 @@ export function Viewport() {
         <span className="vertical-separator"/>
         <button className="icon-tool" title="Focus selected object" onClick={() => studioRef.current?.focusSelected()}><Focus size={17}/></button>
         <button className={`icon-tool ${cameraPreview ? 'active' : ''}`} title="Toggle camera sequence view (C)" onClick={() => setCameraPreview(!cameraPreview)}>{cameraPreview ? <Video size={17}/> : <VideoOff size={17}/>}</button>
-        <button className="icon-tool" title="Reset editor view" onClick={() => studioRef.current?.setView('perspective')}><Focus size={17}/></button>
+        <button className="icon-tool" title="Reset editor view (Home)" onClick={() => studioRef.current?.setView('perspective')}><Focus size={17}/></button>
       </div>
       <div className="viewport-gizmo-label"><span className="axis x">X</span><span className="axis y">Y</span><span className="axis z">Z</span></div>
       <div className="viewport-bottom">

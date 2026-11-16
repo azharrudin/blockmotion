@@ -6,12 +6,40 @@ import { isTownAssetKind } from '../editor/town';
 import { buildTerrain, buildVegetation, buildRoadNetwork } from './EnvironmentAssets';
 import { batchAssetMeshes } from './batchAssets';
 import { buildCharacterAsset } from './CharacterAsset';
+import { ensureModel, getModelTemplate } from './ModelAssets';
+import { buildScriptObject } from './ScriptAssets';
 
 /** Every preset is one selectable group, with its own disposable geometry/materials. */
 export function buildSceneAsset(object: SceneObject): THREE.Group {
+  if (object.kind === 'imported') return buildImportedAsset(object);
+  if (object.kind === 'script') return buildScriptObject(object);
   const root=buildUnbatchedSceneAsset(object);
   return isCharacter(object)?root:batchAssetMeshes(root);
 }
+
+function buildImportedAsset(object: SceneObject): THREE.Group {
+  const group = new THREE.Group();
+  group.name = object.name;
+  if (!object.model) return group;
+  const template = getModelTemplate(object.model);
+  if (!template) {
+    // Kick off parsing once; StudioScene rebuilds the asset when it resolves.
+    if (typeof window !== 'undefined') void ensureModel(object.model);
+    const placeholder = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.2, 1.2),
+      new THREE.MeshBasicMaterial({ color: object.color, wireframe: true, transparent: true, opacity: 0.7 }));
+    placeholder.position.y = 0.6;
+    placeholder.userData.objectId = object.id;
+    group.add(placeholder);
+    return group;
+  }
+  const clone = template.clone(true);
+  clone.traverse(child => {
+    if (child instanceof THREE.Mesh) child.userData = { ...child.userData, objectId: object.id, sharedAsset: true };
+  });
+  group.add(clone);
+  return group;
+}
+
 function buildUnbatchedSceneAsset(object: SceneObject): THREE.Group {
   if (object.kind === 'terrain') return buildTerrain(object);
   if (object.kind === 'roadNetwork') return buildRoadNetwork(object);
@@ -137,10 +165,10 @@ function buildUnbatchedSceneAsset(object: SceneObject): THREE.Group {
 export function disposeSceneAsset(group: THREE.Object3D) {
   const materials = new Set<THREE.Material>();
   group.traverse(child => {
-    if (child instanceof THREE.Mesh) {
-      child.geometry.dispose();
-      for (const material of Array.isArray(child.material) ? child.material : [child.material]) materials.add(material);
-    }
+    // Imported templates own their geometry/materials; clones only borrow them.
+    if (!(child instanceof THREE.Mesh) || child.userData.sharedAsset) return;
+    child.geometry.dispose();
+    for (const material of Array.isArray(child.material) ? child.material : [child.material]) materials.add(material);
   });
   materials.forEach(material => material.dispose());
 }

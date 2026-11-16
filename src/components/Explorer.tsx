@@ -8,7 +8,7 @@ import { EnvironmentGenerator } from './EnvironmentGenerator';
 import { AssetLibrary } from './AssetLibrary';
 
 import { isCharacter, jointNodeId } from '../editor/characters';
-import { isCamera } from '../editor/cameras';
+import { cameraSettings, isCamera } from '../editor/cameras';
 const presets: { id: PresetName; label: string; caption: string; Icon: typeof Wind }[] = [
   { id: 'wave', label: 'Wave', caption: 'Greeting', Icon: Waves },
   { id: 'walk', label: 'Walk', caption: 'Looping', Icon: Footprints },
@@ -52,7 +52,7 @@ export function Explorer() {
           {(project.objects ?? []).map(object => <Fragment key={object.id}>
             <div className={`object-tree-row ${selectedObject === object.id && !selectedJoint ? 'is-selected' : ''}`}>
               {isCharacter(object) && <button className="object-expand" aria-label={`${collapsed.has(object.id) ? 'Expand' : 'Collapse'} ${object.name}`} aria-expanded={!collapsed.has(object.id)} onClick={() => setCollapsed(previous => { const next = new Set(previous); if (next.has(object.id)) next.delete(object.id); else next.add(object.id); return next; })}>{collapsed.has(object.id) ? <ChevronRight size={13}/> : <ChevronDown size={13}/>}</button>}
-              <button className="tree-item tree-indent" data-node-id={object.id} onClick={() => selectObject(object.id)} title={object.name}>{!isCharacter(object) && <span className="tree-spacer"/>}{isCharacter(object) ? <PersonStanding size={15} style={{ color: object.color }}/> : isCamera(object) ? <Camera size={15} className="tree-camera"/> : <Box size={15} style={{ color: object.color }}/>}<span className="object-tree-name">{object.name}</span>{isCamera(object) && project.activeCameraId === object.id && <span className="tree-meta">ACTIVE</span>}</button>
+              <button className="tree-item tree-indent" data-node-id={object.id} onClick={() => selectObject(object.id)} title={object.name}>{!isCharacter(object) && <span className="tree-spacer"/>}{isCharacter(object) ? <PersonStanding size={15} style={{ color: object.color }}/> : isCamera(object) ? <Camera size={15} className="tree-camera"/> : <Box size={15} style={{ color: object.color }}/>}<span className="object-tree-name">{object.name}</span>{isCamera(object) && project.activeCameraId === object.id ? <span className="tree-meta">ACTIVE</span> : isCamera(object) && cameraSettings(object).targetId ? <span className="tree-meta">FOLLOW</span> : null}</button>
               <button className="object-tree-delete" title={`Delete ${object.name}`} onClick={() => { selectObject(object.id); deleteObject(); }}><Trash2 size={13}/></button>
             </div>
             {isCharacter(object) && !collapsed.has(object.id) && JOINT_IDS.map(joint => <button key={joint} data-node-id={jointNodeId(object.id, joint)} className={`tree-item tree-bone ${selection === jointNodeId(object.id, joint) ? 'is-selected' : ''}`} onClick={() => selectObject(object.id, joint)}><span className="tree-guideline"/><Box size={13}/><span>{BONE_LABELS[joint]}</span></button>)}

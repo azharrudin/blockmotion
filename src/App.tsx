@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { ArrowDownToLine, Camera, Check, ChevronDown, CircleHelp, Clapperboard, Code2, FilePlus2, FolderOpen, Keyboard, Layers3, Menu, MonitorPlay, MoreHorizontal, Redo2, Save, Square, Undo2, Video, X } from 'lucide-react';
 import { Explorer } from './components/Explorer';
@@ -19,6 +19,9 @@ function fileDownload(filename: string, blob: Blob) {
   setTimeout(() => URL.revokeObjectURL(uri), 2000);
 }
 function sanitizedName(name: string) { return name.trim().replace(/[^a-z0-9_-]+/gi, '-').replace(/^-|-$/g, '') || 'animation'; }
+const LAYOUT_KEY = 'blockmotion-layout-v1';
+const TIMELINE_KEY = 'blockmotion-timeline-height-v1';
+type PanelLayout = { left: number; right: number };
 function saveJson() {
   const project = useEditor.getState().project;
   fileDownload(`${sanitizedName(project.name)}.blockmotion.json`, new Blob([JSON.stringify(project, null, 2)], {type:'application/json'}));
@@ -47,6 +50,139 @@ export default function App() {
   const [helpOpen, setHelpOpen] = useState(false);
   const [recording, setRecording] = useState(false);
   const [mobilePanel, setMobilePanel] = useState<'explorer'|'inspector'|null>(null);
+  const [layout, setLayout] = useState<PanelLayout | null>(() => {
+    try {
+      const raw = localStorage.getItem(LAYOUT_KEY);
+      if (!raw) return null;
+      const value = JSON.parse(raw) as Partial<PanelLayout>;
+      if (typeof value.left === 'number' && Number.isFinite(value.left)
+        && typeof value.right === 'number' && Number.isFinite(value.right)) {
+        return { left: Math.max(170, Math.min(460, value.left)), right: Math.max(200, Math.min(460, value.right)) };
+      }
+    } catch { /* Private browsing or corrupt layout */ }
+    return null;
+  });
+  const resize = useRef<{ side: 'left'|'right'; startX: number; left: number; right: number } | null>(null);
+  const [timelineHeight, setTimelineHeight] = useState<number | null>(() => {
+    try {
+      const raw = localStorage.getItem(TIMELINE_KEY);
+      if (raw != null) {
+        const value = Number(raw);
+        if (Number.isFinite(value)) return Math.max(140, Math.min(700, value));
+      }
+    } catch { /* ignore */ }
+    return null;
+  });
+  const timelineResize = useRef<{ startY: number; startHeight: number } | null>(null);
+  useEffect(() => {
+    if (!layout) return;
+    try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout)); } catch { /* ignore */ }
+  }, [layout]);
+  useEffect(() => {
+    if (timelineHeight == null) return;
+    try { localStorage.setItem(TIMELINE_KEY, String(timelineHeight)); } catch { /* ignore */ }
+  }, [timelineHeight]);
+  useEffect(() => {
+    if (timelineHeight == null) return;
+    const clamp = () => setTimelineHeight(current => {
+      if (current == null) return current;
+      const slot = document.querySelector('.center-slot')?.getBoundingClientRect().height ?? window.innerHeight;
+      const next = Math.max(140, Math.min(Math.max(140, slot - 280), current));
+      return next === current ? current : next;
+    });
+    clamp();
+    window.addEventListener('resize', clamp);
+    return () => window.removeEventListener('resize', clamp);
+  }, [timelineHeight]);
+  // Keep persisted widths usable when the browser window shrinks.
+  useEffect(() => {
+    if (!layout) return;
+    const clamp = () => setLayout(current => {
+      if (!current) return current;
+      const centerMin = 370, handle = 12;
+      const left = Math.max(170, Math.min(current.left, Math.max(170, window.innerWidth - current.right - centerMin - handle)));
+      const right = Math.max(200, Math.min(current.right, Math.max(200, window.innerWidth - left - centerMin - handle)));
+      return left === current.left && right === current.right ? current : { left, right };
+    });
+    clamp();
+    window.addEventListener('resize', clamp);
+    return () => window.removeEventListener('resize', clamp);
+  }, [layout]);
+  const panelWidth = (selector: string, fallback: number) => document.querySelector(selector)?.getBoundingClientRect().width ?? fallback;
+  const startResize = (side: 'left'|'right') => (event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    resize.current = { side, startX: event.clientX,
+      left: Math.round(panelWidth('.left-slot', layout?.left ?? 248)),
+      right: Math.round(panelWidth('.right-slot', layout?.right ?? 282)) };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    event.currentTarget.classList.add('active');
+  };
+  const moveResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    const start = resize.current;
+    if (!start) return;
+    const dx = event.clientX - start.startX;
+    const centerMin = 370;
+    if (start.side === 'left') {
+      const max = Math.max(170, window.innerWidth - start.right - centerMin - 12);
+      setLayout({ left: Math.round(Math.max(170, Math.min(max, start.left + dx))), right: start.right });
+    } else {
+      const max = Math.max(200, window.innerWidth - start.left - centerMin - 12);
+      setLayout({ left: start.left, right: Math.round(Math.max(200, Math.min(max, start.right - dx))) });
+    }
+  };
+  const endResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!resize.current) return;
+    resize.current = null;
+    event.currentTarget.classList.remove('active');
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+  const nudgePanel = (side: 'left'|'right', delta: number) => {
+    const left = Math.round(panelWidth('.left-slot', layout?.left ?? 248));
+    const right = Math.round(panelWidth('.right-slot', layout?.right ?? 282));
+    const centerMin = 370;
+    if (side === 'left') {
+      const max = Math.max(170, window.innerWidth - right - centerMin - 12);
+      setLayout({ left: Math.max(170, Math.min(max, left + delta)), right });
+    } else {
+      const max = Math.max(200, window.innerWidth - left - centerMin - 12);
+      setLayout({ left, right: Math.max(200, Math.min(max, right - delta)) });
+    }
+  };
+  const resetLayout = () => {
+    setLayout(null);
+    try { localStorage.removeItem(LAYOUT_KEY); } catch { /* ignore */ }
+  };
+  const timelineBounds = () => {
+    const slot = document.querySelector('.center-slot')?.getBoundingClientRect().height ?? window.innerHeight;
+    return { max: Math.max(140, slot - 280) };
+  };
+  const startTimelineResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const height = document.querySelector('.timeline-panel')?.getBoundingClientRect().height ?? timelineHeight ?? 327;
+    timelineResize.current = { startY: event.clientY, startHeight: Math.round(height) };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    event.currentTarget.classList.add('active');
+  };
+  const moveTimelineResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    const start = timelineResize.current;
+    if (!start) return;
+    const next = Math.round(Math.max(140, Math.min(timelineBounds().max, start.startHeight - (event.clientY - start.startY))));
+    setTimelineHeight(next);
+  };
+  const endTimelineResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!timelineResize.current) return;
+    timelineResize.current = null;
+    event.currentTarget.classList.remove('active');
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+  const nudgeTimeline = (delta: number) => {
+    const height = document.querySelector('.timeline-panel')?.getBoundingClientRect().height ?? timelineHeight ?? 327;
+    setTimelineHeight(Math.round(Math.max(140, Math.min(timelineBounds().max, height + delta))));
+  };
+  const resetTimelineHeight = () => {
+    setTimelineHeight(null);
+    try { localStorage.removeItem(TIMELINE_KEY); } catch { /* ignore */ }
+  };
 
   useEffect(() => {
     const timer = window.setTimeout(() => { if (!persistProject(project)) flash('Browser storage unavailable — export a JSON backup'); }, 600);
@@ -84,6 +220,7 @@ export default function App() {
         case 'c': state.setCameraPreview(!state.cameraPreview); break;
         case 'arrowleft': event.preventDefault(); state.seek(state.time - 1 / state.project.fps); break;
         case 'arrowright': event.preventDefault(); state.seek(state.time + 1 / state.project.fps); break;
+        case 'home': event.preventDefault(); studioRef.current?.setView('perspective'); break;
         case 'escape': state.deselect(); break;
         case 'delete': case 'backspace': if (state.selectedCut) { event.preventDefault(); state.deleteCameraCut(); } else if (state.selectedKey) { event.preventDefault(); state.deleteKey(); } else if (state.selectedObject) { event.preventDefault(); state.deleteObject(); } break;
       }
@@ -99,6 +236,8 @@ export default function App() {
       if (file.size > 5_000_000) throw new Error('File exceeds 5MB');
       const parsed: unknown = JSON.parse(await file.text());
       if (!isValidProject(parsed)) throw new Error('Invalid or incompatible BlockMotion project');
+      if (parsed.objects?.some(object => object.kind === 'script')
+        && !window.confirm('This project contains custom Three.js scripts that will run in your browser. Only open projects you trust.\n\nContinue?')) return;
       const tracks = Object.fromEntries(Object.entries(parsed.tracks).map(([id, keys]) => [id, [...keys].sort((a,b) => a.time-b.time)]));
       useEditor.getState().loadProject({ ...parsed, tracks } as Project);
     } catch (err) {
@@ -178,10 +317,32 @@ export default function App() {
       </div>
       <input ref={fileInput} className="hidden-input" type="file" accept=".json,application/json" onChange={importProject}/>
     </header>
-    <main className="studio-layout">
-      <div className={`left-slot ${mobilePanel==='explorer'?'mobile-open':''}`}><Explorer/></div>
-      <div className="center-slot"><Viewport/><Timeline/></div>
-      <div className={`right-slot ${mobilePanel==='inspector'?'mobile-open':''}`}><Inspector/></div>
+    <main className="studio-layout" style={layout ? { ['--left-panel' as string]: `${layout.left}px`, ['--right-panel' as string]: `${layout.right}px` } as CSSProperties : undefined}>
+      <div className={`left-slot ${mobilePanel==='explorer'?'mobile-open':''}`}>
+        <Explorer/>
+        <div className="panel-resizer panel-resizer-left" role="separator" aria-orientation="vertical" aria-label="Resize Explorer panel" tabIndex={0}
+          title="Drag to resize · double-click to reset"
+          onPointerDown={startResize('left')} onPointerMove={moveResize} onPointerUp={endResize} onPointerCancel={endResize}
+          onDoubleClick={resetLayout}
+          onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); nudgePanel('left', event.key === 'ArrowLeft' ? -12 : 12); } }}/>
+      </div>
+      <div className="center-slot" style={timelineHeight != null ? { ['--timeline-height' as string]: `${timelineHeight}px` } as CSSProperties : undefined}>
+        <Viewport/>
+        <div className="timeline-resizer" role="separator" aria-orientation="horizontal" aria-label="Resize animation timeline" tabIndex={0}
+          title="Drag to resize timeline · double-click to reset"
+          onPointerDown={startTimelineResize} onPointerMove={moveTimelineResize} onPointerUp={endTimelineResize} onPointerCancel={endTimelineResize}
+          onDoubleClick={resetTimelineHeight}
+          onKeyDown={event => { if (event.key === 'ArrowUp' || event.key === 'ArrowDown') { event.preventDefault(); nudgeTimeline(event.key === 'ArrowUp' ? 16 : -16); } }}/>
+        <Timeline/>
+      </div>
+      <div className={`right-slot ${mobilePanel==='inspector'?'mobile-open':''}`}>
+        <Inspector/>
+        <div className="panel-resizer panel-resizer-right" role="separator" aria-orientation="vertical" aria-label="Resize Inspector panel" tabIndex={0}
+          title="Drag to resize · double-click to reset"
+          onPointerDown={startResize('right')} onPointerMove={moveResize} onPointerUp={endResize} onPointerCancel={endResize}
+          onDoubleClick={resetLayout}
+          onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); nudgePanel('right', event.key === 'ArrowLeft' ? -12 : 12); } }}/>
+      </div>
     </main>
     <footer className="status-bar"><div><span className="status-dot"/> ENGINE READY <span className="status-divider">|</span> THREE.JS / WEBGL <span className="status-divider">|</span> R6 PROCEDURAL RIG</div><div className="status-right">LOCAL PROJECT <span className="status-divider">|</span> NO EXTERNAL 3D ASSETS <span className="status-divider">|</span><span className="status-strong">v1.0.0</span></div></footer>
     <div className="mobile-toolbar"><button className={mobilePanel==='explorer'?'active':''} onClick={() => setMobilePanel(mobilePanel==='explorer'?null:'explorer')}><Layers3 size={17}/> Explorer</button><button onClick={() => setHelpOpen(true)}><Menu size={17}/> Shortcuts</button><button className={mobilePanel==='inspector'?'active':''} onClick={() => setMobilePanel(mobilePanel==='inspector'?null:'inspector')}><MoreHorizontal size={17}/> Inspector</button></div>
@@ -189,7 +350,7 @@ export default function App() {
     {helpOpen && <div className="modal-backdrop" onClick={() => setHelpOpen(false)}><div className="help-modal" onClick={e => e.stopPropagation()}>
       <div className="help-modal-title"><span><Keyboard size={19}/> Keyboard shortcuts</span><button className="header-icon-btn" onClick={() => setHelpOpen(false)}><X size={17}/></button></div>
       <p>Build procedural animations by selecting an object or body joint, adjusting its transform, inserting a keyframe, and scrubbing the timeline.</p>
-      {([['Space','Play / pause'], ['G / R / S','Move / rotate / scale gizmo'], ['K','Insert keyframe on selected track'], ['← / →','Previous / next frame'], ['C','Toggle cinematic camera'], ['Delete','Delete selected object or keyframe'], ['Ctrl / Cmd + D','Duplicate selected object'], ['Ctrl / Cmd + Z','Undo'], ['Ctrl / Cmd + Shift + Z','Redo'], ['Ctrl / Cmd + S','Export JSON project']] as const).map(([key, meaning])=><div className="shortcut-row" key={key}><span>{meaning}</span><kbd>{key}</kbd></div>)}
+      {([['Space','Play / pause'], ['G / R / S','Move / rotate / scale gizmo'], ['W A S D','Move editor camera (hover viewport)'], ['Home','Reset editor view'], ['K','Insert keyframe on selected track'], ['← / →','Previous / next frame'], ['C','Toggle cinematic camera'], ['Delete','Delete selected object or keyframe'], ['Esc','Deselect object / node'], ['Ctrl / Cmd + D','Duplicate selected object'], ['Ctrl / Cmd + Z','Undo'], ['Ctrl / Cmd + Shift + Z','Redo'], ['Ctrl / Cmd + S','Export JSON project']] as const).map(([key, meaning])=><div className="shortcut-row" key={key}><span>{meaning}</span><kbd>{key}</kbd></div>)}
       <div className="help-modal-footer">Tip: select <strong>Shot Camera</strong> in Explorer, add camera keyframes, then click <strong>Camera view</strong> for cinematic playback.</div>
     </div></div>}
   </div>;

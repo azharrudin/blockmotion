@@ -3,6 +3,7 @@ import { isCharacter, jointNodeId, resolveObjectNode } from './characters';
 import { createSceneObject } from './assets';
 import { cameraNodeId, cleanCameraReferences } from './cameras';
 import { CAMERA_CUT_LABELS } from './cameraCuts';
+import { cleanWeldReferences } from './attachments';
 import { sampleObjectPose, sampleTrack } from './interpolation';
 
 export function getTrack(project: Project, id: string): Keyframe[] {
@@ -65,12 +66,13 @@ export function sortProjectTracks(project: Project): Project {
       return {id:cut.id,time:cut.time,view:'node' as const,cameraId:node.id};
     });
   }
-  return cleanCameraReferences({
+  return cleanWeldReferences(cleanCameraReferences({
     ...project, sceneVersion: 2, cameraVersion:1,activeCameraId:active,
     ...(cuts && {cameraCuts:[...cuts].sort((a,b)=>a.time-b.time)}),
     // Keep the legacy file shape for importing v1 projects; the camera is the only global track.
     tracks: Object.fromEntries(BONE_IDS.map(id => [id, [] as Keyframe[]])) as Project['tracks'],
     objects: objects.map(o => ({ ...o, pose: clonePose(o.pose), ...(o.keyframes && { keyframes: sortKeys(o.keyframes) }),
-      ...(o.joints && { joints: Object.fromEntries(Object.entries(o.joints).map(([joint, keys]) => [joint, sortKeys(keys)])) }) })),
-  });
+      ...(o.joints && { joints: Object.fromEntries(Object.entries(o.joints).map(([joint, keys]) => [joint, sortKeys(keys)])) }),
+      ...(o.welds && { welds: o.welds.filter(weld => weld.time <= project.duration).sort((a, b) => a.time - b.time) }) })),
+  }));
 }

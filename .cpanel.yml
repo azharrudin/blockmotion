@@ -1,0 +1,10 @@
+---
+deployment:
+  tasks:
+    # Change this to the domain's document root if it differs from public_html.
+    - export DEPLOYPATH="$HOME/public_html"
+    - >-
+      npm ci --include=dev &&
+      npm run build &&
+      /bin/mkdir -p "$DEPLOYPATH" &&
+      /bin/cp -R dist/. "$DEPLOYPATH/"

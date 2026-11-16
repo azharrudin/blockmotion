@@ -2,17 +2,19 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { currentPose, useEditor } from '../editor/store';
-import { JOINT_IDS, type CameraCutView, type Tool, type Vec3 } from '../editor/types';
+import { JOINT_IDS, type CameraCutView, type Pose, type Tool, type Vec3 } from '../editor/types';
 import { JOINT_POSITIONS, jointNodeId, resolveObjectNode } from '../editor/characters';
 import { characterNodes } from './CharacterAsset';
 import { sampleNodePose } from '../editor/tracks';
 import { sampleObjectPose, sampleTrack } from '../editor/interpolation';
 import { resolveCameraView, type CameraSnapshot } from '../editor/cameraCuts';
-import { cameraSettings, isCamera } from '../editor/cameras';
+import { activeCameraNodeId, cameraSettings, isCamera } from '../editor/cameras';
 import { SKY_PRESETS } from '../editor/sky';
 import type { SkySettings } from '../editor/types';
 import type { SceneObject } from '../editor/types';
 import { buildSceneAsset, disposeSceneAsset } from './SceneAssets';
+import { subscribeModelAssets } from './ModelAssets';
+import { weldedWorldPose } from '../editor/attachments';
 import { PreviewQuality, type PreviewMode, type PreviewStats } from './PreviewQuality';
 
 const deg = THREE.MathUtils.degToRad;
@@ -91,6 +93,9 @@ export class StudioScene {
   private pointerDown = { x: 0, y: 0 };
   private draggingGizmo = false;
   private gizmoObject: string | null = null;
+  private navKeys = new Set<string>();
+  private navBoost = false;
+  private viewportHovered = false;
   private disposers: (() => void)[] = [];
   private poseCache = new Map<string, { object: SceneObject; overrides: ReturnType<typeof useEditor.getState>['overrides']; interpolation: string; time: number }>();
 
@@ -163,8 +168,14 @@ export class StudioScene {
     this.scene.add(this.highlight);
     this.renderer.domElement.addEventListener('pointerdown', this.onPointerDown);
     this.renderer.domElement.addEventListener('pointerup', this.onPointerUp);
+    this.renderer.domElement.addEventListener('pointerenter', this.onViewportEnter);
+    this.renderer.domElement.addEventListener('pointerleave', this.onViewportLeave);
+    window.addEventListener('keydown', this.onNavigateKeyDown, true);
+    window.addEventListener('keyup', this.onNavigateKeyUp, true);
+    window.addEventListener('blur', this.onWindowBlur);
     document.addEventListener('visibilitychange', this.resetFrameClock);
     this.disposers.push(subscribeEditorControls(() => this.syncEditorControls()));
+    this.disposers.push(subscribeModelAssets(() => this.reloadImportedAssets()));
     this.resizeObserver = new ResizeObserver(this.resize);
     this.resizeObserver.observe(container);
     this.resize();
@@ -247,6 +258,46 @@ export class StudioScene {
     else useEditor.getState().deselect();
   };
 
+  private onViewportEnter = () => { this.viewportHovered = true; };
+  private onViewportLeave = () => { this.viewportHovered = false; this.navKeys.clear(); };
+  private onWindowBlur = () => { this.navKeys.clear(); };
+  // WASD flies the editor camera while the pointer is over the viewport.
+  // Capturing here also keeps "S" from switching to the scale tool mid-move.
+  private onNavigateKeyDown = (event: KeyboardEvent) => {
+    if (!this.viewportHovered || event.ctrlKey || event.metaKey || event.altKey) return;
+    const el = event.target as HTMLElement | null;
+    if (el && (['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) || el.isContentEditable)) return;
+    const key = event.key.toLowerCase();
+    if (!['w', 'a', 's', 'd'].includes(key)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    this.navBoost = event.shiftKey;
+    this.navKeys.add(key);
+  };
+  private onNavigateKeyUp = (event: KeyboardEvent) => { this.navKeys.delete(event.key.toLowerCase()); };
+  private moveEditorCamera(dt: number) {
+    if (!this.navKeys.size) return false;
+    const state = useEditor.getState();
+    if (state.cameraPreview || this.draggingGizmo) return false;
+    const forward = new THREE.Vector3();
+    this.editorCamera.getWorldDirection(forward);
+    forward.y = 0;
+    if (forward.lengthSq() < 1e-6) forward.set(0, 0, -1);
+    forward.normalize();
+    const right = new THREE.Vector3().crossVectors(forward, this.editorCamera.up).normalize();
+    const move = new THREE.Vector3();
+    if (this.navKeys.has('w')) move.add(forward);
+    if (this.navKeys.has('s')) move.sub(forward);
+    if (this.navKeys.has('d')) move.add(right);
+    if (this.navKeys.has('a')) move.sub(right);
+    if (move.lengthSq() === 0) return false;
+    move.normalize().multiplyScalar((this.navBoost ? 18 : 7) * Math.min(Math.max(dt, 0), 0.1));
+    this.editorCamera.position.add(move);
+    this.orbit.target.add(move);
+    this.renderRequested = true;
+    return true;
+  }
+
   private resize = () => {
     this.renderRequested = true;
     const width = Math.max(1, this.container.clientWidth);
@@ -306,6 +357,20 @@ export class StudioScene {
     if (!useEditor.getState().selectedObject) this.highlight.visible = false;
   }
 
+  private reloadImportedAssets = () => {
+    const imported = new Set(useEditor.getState().project.objects?.filter(object => object.kind === 'imported').map(object => object.id));
+    for (const [id, node] of this.assetNodes) {
+      if (!imported.has(id)) continue;
+      if (this.controls.object === node.root || this.controls.object?.userData.objectId === id) this.controls.detach();
+      this.scene.remove(node.root);
+      disposeSceneAsset(node.root);
+      this.assetNodes.delete(id);
+      this.poseCache.delete(id);
+    }
+    this.syncSceneObjects(true);
+    this.renderRequested = true;
+  };
+
   private syncSceneObjects(force = false) {
     const state = useEditor.getState();
     const objects = state.project.objects;
@@ -322,7 +387,8 @@ export class StudioScene {
     }
     for (const object of objects ?? []) {
       let node = this.assetNodes.get(object.id);
-      const geometryKey = JSON.stringify([object.kind, object.terrain, object.roadGrid]);
+      const geometryKey = JSON.stringify([object.kind, object.terrain, object.roadGrid,
+        object.kind === 'script' ? object.script : undefined]);
       if (node && node.geometryKey !== geometryKey) {
         if (this.controls.object === node.root || this.controls.object?.userData.objectId === object.id) this.controls.detach();
         this.scene.remove(node.root);
@@ -390,10 +456,11 @@ export class StudioScene {
       const root = this.assetNodes.get(object.id)?.root;
       if (!root) continue;
       const previous = cache.get(object.id);
+      const hasWelds = (object.welds?.length ?? 0) > 0;
       const animated = (object.keyframes?.length ?? 0) > 1
         || JOINT_IDS.some(joint => (object.joints?.[joint]?.length ?? 0) > 1);
       const dragging = this.draggingGizmo && state.selectedObject === object.id;
-      if (!dragging && previous?.object === object && previous.overrides === state.overrides
+      if (!dragging && !hasWelds && previous?.object === object && previous.overrides === state.overrides
         && previous.interpolation === state.project.interpolation && (!animated || previous.time === state.time)) continue;
       const apply = (target: THREE.Object3D, pose: ReturnType<typeof sampleObjectPose>, base?: Vec3) => {
         target.position.set(...pose.position);
@@ -404,7 +471,8 @@ export class StudioScene {
         target.scale.set(...pose.scale);
       };
       if (!(this.draggingGizmo && state.selection === object.id)) {
-        apply(root, state.overrides[object.id] ?? sampleObjectPose(object, state.time, state.project.interpolation));
+        const welded = hasWelds ? weldedWorldPose(state.project, object, state.time) : null;
+        apply(root, welded ?? state.overrides[object.id] ?? sampleObjectPose(object, state.time, state.project.interpolation));
       }
       const joints = characterNodes(root);
       if (joints) for (const joint of JOINT_IDS) {
@@ -447,8 +515,9 @@ export class StudioScene {
     const store = useEditor.getState();
     if (store.playing) store.tick(dt);
     const state = useEditor.getState();
+    const navigated = this.moveEditorCamera(dt);
     const cameraMoved = this.orbit.update();
-    if (!state.playing && !this.draggingGizmo && !cameraMoved
+    if (!state.playing && !this.draggingGizmo && !cameraMoved && !navigated
       && !this.renderRequested && this.renderedState === state) {
       this.previewQuality.observe(0, false);
       return;
@@ -457,10 +526,11 @@ export class StudioScene {
     this.renderedState = state;
     this.applySky(state.project.sky, state.project.palette.background);
     if (!(this.draggingGizmo && state.selection === 'camera')) {
+      const activeCamera = state.project.objects?.find(object => isCamera(object) && object.id === activeCameraNodeId(state.project));
       const pose = state.overrides.camera ?? sampleNodePose(state.project, 'camera', state.time);
-      this.shotCamera.position.set(...pose.position);
-      this.shotCamera.rotation.set(...pose.rotation.map(deg) as Vec3);
-      this.shotCamera.scale.set(...pose.scale);
+      this.applyCameraObjectPose(this.shotCamera, activeCamera, pose, state.time);
+      const fov = activeCamera ? cameraSettings(activeCamera).fov : 48;
+      if (this.shotCamera.fov !== fov) { this.shotCamera.fov = fov; this.shotCamera.updateProjectionMatrix(); }
     }
     this.applySceneObjectPoses();
     this.shotCamera.updateMatrixWorld();
@@ -482,18 +552,47 @@ export class StudioScene {
     }
   };
 
+  applyCameraObjectPose(camera: THREE.PerspectiveCamera, object: SceneObject | undefined, pose: Pose, time: number) {
+    const state = useEditor.getState();
+    const settings = object ? cameraSettings(object) : undefined;
+    const target = settings?.targetId
+      ? state.project.objects?.find(candidate => candidate.id === settings.targetId && candidate.id !== object!.id)
+      : undefined;
+    const targetPose = target ? weldedWorldPose(state.project, target, time) ?? sampleObjectPose(target, time, state.project.interpolation) : undefined;
+    const targetStart = target ? weldedWorldPose(state.project, target, 0) ?? sampleObjectPose(target, 0, state.project.interpolation) : undefined;
+    const dx = targetPose && targetStart ? targetPose.position[0] - targetStart.position[0] : 0;
+    const dy = targetPose && targetStart ? targetPose.position[1] - targetStart.position[1] : 0;
+    const dz = targetPose && targetStart ? targetPose.position[2] - targetStart.position[2] : 0;
+    const base = (object ? weldedWorldPose(state.project, object, time) : null) ?? pose;
+    camera.position.set(base.position[0] + dx, base.position[1] + dy, base.position[2] + dz);
+    camera.scale.set(...base.scale);
+    if (target && targetPose && settings?.lookAtTarget) {
+      const point = new THREE.Vector3(...targetPose.position);
+      const root = this.assetNodes.get(target.id)?.root;
+      if (root) {
+        root.updateWorldMatrix(true, true);
+        const bounds = new THREE.Box3().setFromObject(root);
+        if (!bounds.isEmpty()) bounds.getCenter(point);
+      } else {
+        point.y += 1;
+      }
+      camera.up.set(0, 1, 0);
+      camera.lookAt(point);
+    } else {
+      camera.rotation.set(...base.rotation.map(deg) as Vec3);
+    }
+    camera.updateMatrixWorld();
+  }
+
   playbackCamera(): THREE.PerspectiveCamera {
     const state = useEditor.getState();
     if (!state.cameraPreview) return this.editorCamera;
     const resolved = resolveCameraView(state.project, state.time);
     if (resolved?.kind === 'node') {
       const pose = sampleNodePose(state.project, resolved.camera.id, state.time);
-      this.cutCamera.position.set(...pose.position);
-      this.cutCamera.rotation.set(...pose.rotation.map(deg) as Vec3);
-      this.cutCamera.scale.set(...pose.scale);
+      this.applyCameraObjectPose(this.cutCamera, resolved.camera, pose, state.time);
       const fov = cameraSettings(resolved.camera).fov;
       if (this.cutCamera.fov !== fov) { this.cutCamera.fov = fov; this.cutCamera.updateProjectionMatrix(); }
-      this.cutCamera.updateMatrixWorld();
       return this.cutCamera;
     }
     const cut = resolved?.kind === 'cut' ? resolved.cut : null;
@@ -502,12 +601,9 @@ export class StudioScene {
       const camera = state.project.objects?.find(o => isCamera(o) && o.id === cut.cameraId);
       if (!camera) return this.shotCamera;
       const pose = sampleNodePose(state.project, camera.id, state.time);
-      this.cutCamera.position.set(...pose.position);
-      this.cutCamera.rotation.set(...pose.rotation.map(deg) as Vec3);
-      this.cutCamera.scale.set(...pose.scale);
+      this.applyCameraObjectPose(this.cutCamera, camera, pose, state.time);
       const fov = cameraSettings(camera).fov;
       if (this.cutCamera.fov !== fov) { this.cutCamera.fov = fov; this.cutCamera.updateProjectionMatrix(); }
-      this.cutCamera.updateMatrixWorld();
       return this.cutCamera;
     }
     if (!cut.pose) return this.shotCamera;
@@ -593,6 +689,11 @@ export class StudioScene {
     this.resizeObserver.disconnect();
     this.renderer.domElement.removeEventListener('pointerdown', this.onPointerDown);
     this.renderer.domElement.removeEventListener('pointerup', this.onPointerUp);
+    this.renderer.domElement.removeEventListener('pointerenter', this.onViewportEnter);
+    this.renderer.domElement.removeEventListener('pointerleave', this.onViewportLeave);
+    window.removeEventListener('keydown', this.onNavigateKeyDown, true);
+    window.removeEventListener('keyup', this.onNavigateKeyUp, true);
+    window.removeEventListener('blur', this.onWindowBlur);
     document.removeEventListener('visibilitychange', this.resetFrameClock);
     this.disposers.forEach(dispose => dispose());
     this.controls.detach();

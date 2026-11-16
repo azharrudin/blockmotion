@@ -1,4 +1,4 @@
-import { clonePose, keyId, neutralPose, type AssetKind, type SceneObject, type Pose, JOINT_IDS } from './types';
+import { clonePose, keyId, neutralPose, type AssetKind, type ImportedModel, type SceneObject, type Pose, type WeldKey, JOINT_IDS } from './types';
 
 import { TOWN_ASSETS, snapToGrid, type AssetDefinition } from './town';
 import { DEFAULT_CAMERA_SETTINGS, isValidCameraSettings } from './cameras';
@@ -6,6 +6,15 @@ import { isValidTerrain } from './terrain';
 import { isCharacterKind, isJointId } from './characters';
 
 export const MAX_OBJECTS = 500;
+export const MAX_SCRIPT_LENGTH = 20_000;
+export const DEFAULT_SCRIPT = `const group = new THREE.Group();
+const body = new THREE.Mesh(
+  new THREE.BoxGeometry(1, 1.6, 0.8),
+  new THREE.MeshStandardMaterial({ color: '#8ea9ff', roughness: 0.7 }),
+);
+body.position.y = 0.8;
+group.add(body);
+return group;`;
 export const ASSET_CATALOG: Record<AssetKind, AssetDefinition> = {
   camera: { label: 'Camera', category: 'Cameras', color: '#89b7e7', keywords: 'kamera perspective orthographic' },
   r6Male: { label: 'Blocky R6 Male', category: 'Characters', color: '#427fe4' },
@@ -25,6 +34,8 @@ export const ASSET_CATALOG: Record<AssetKind, AssetDefinition> = {
   sphere: { label: 'Sphere', category: 'Primitives', color: '#e7ae69' },
   cylinder: { label: 'Cylinder', category: 'Primitives', color: '#9d88d0' },
   plane: { label: 'Ground tile', category: 'Primitives', color: '#7b9a70' },
+  script: { label: 'Script object', category: 'Custom', color: '#8ea9ff', keywords: 'custom threejs script code javascript object' },
+  imported: { label: 'Imported model', category: 'Custom', color: '#9aa9c8', keywords: 'import glb gltf model 3d' },
   ...TOWN_ASSETS,
   terrain: { label: 'Terrain', category: 'Nature', color: '#ffffff', keywords: 'gunung pegunungan pasir terrain tanah desert' },
   jungleTree: { label: 'Jungle tree', category: 'Nature', color: '#438958', keywords: 'pohon hutan jungle' },
@@ -46,10 +57,12 @@ export function createSceneObject(kind: AssetKind, existing: SceneObject[], grid
   if (kind === 'camera') Object.assign(pose, neutralPose('camera'));
   let suffix = 1;
   while (existing.some(o => o.name === `${asset.label} ${suffix}`)) suffix++;
-  return { id: `obj_${keyId()}`, kind, name: `${asset.label} ${suffix}`, color: asset.color, ...(kind === 'camera' && { camera: { ...DEFAULT_CAMERA_SETTINGS, followOffset: [...DEFAULT_CAMERA_SETTINGS.followOffset] } }), pose: clonePose(pose), keyframes: [{ id: keyId(), time: 0, value: clonePose(pose) }], ...(isCharacterKind(kind) && {
+  const object: SceneObject = { id: `obj_${keyId()}`, kind, name: `${asset.label} ${suffix}`, color: asset.color, ...(kind === 'camera' && { camera: { ...DEFAULT_CAMERA_SETTINGS, followOffset: [...DEFAULT_CAMERA_SETTINGS.followOffset] } }), pose: clonePose(pose), keyframes: [{ id: keyId(), time: 0, value: clonePose(pose) }], ...(isCharacterKind(kind) && {
     joints: Object.fromEntries(JOINT_IDS.map(joint => [joint, [{ id: keyId(), time: 0, value: neutralPose() }]])),
     skinColor: '#f3c58b', pantsColor: '#343d53',
   }) };
+  if (kind === 'script') object.script = DEFAULT_SCRIPT;
+  return object;
 }
 
 export function isValidSceneObject(value: unknown, duration = 600): value is SceneObject {
@@ -60,6 +73,12 @@ export function isValidSceneObject(value: unknown, duration = 600): value is Sce
   if (typeof o.name !== 'string' || o.name.trim().length === 0 || o.name.length > 60) return false;
   if (typeof o.color !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(o.color)) return false;
   if (o.camera !== undefined && (o.kind !== 'camera' || !isValidCameraSettings(o.camera))) return false;
+  if (o.kind === 'imported') {
+    if (!isValidImportedModel(o.model)) return false;
+  } else if (o.model !== undefined) return false;
+  if (o.kind === 'script') {
+    if (typeof o.script !== 'string' || o.script.trim().length === 0 || o.script.length > MAX_SCRIPT_LENGTH) return false;
+  } else if (o.script !== undefined) return false;
   if (o.terrain !== undefined && (o.kind !== 'terrain' || !isValidTerrain(o.terrain))) return false;
   if (o.roadGrid !== undefined) {
     if (o.kind !== 'roadNetwork' || typeof o.roadGrid !== 'object' || o.roadGrid === null) return false;
@@ -67,6 +86,10 @@ export function isValidSceneObject(value: unknown, duration = 600): value is Sce
     if (grid.blockSize !== 18 || !['columns', 'rows'].every(k => typeof grid[k] === 'number' && Number.isInteger(grid[k]) && grid[k] >= 1 && grid[k] <= 8)) return false;
   }
   if (!isValidObjectPose(o.pose)) return false;
+  if (o.welds !== undefined) {
+    if (!isValidWelds(o.welds, duration)) return false;
+    if ((o.welds as WeldKey[]).some(weld => weld.targetId === o.id)) return false;
+  }
   if (o.keyframes !== undefined && !isValidObjectKeys(o.keyframes, duration)) return false;
   if (o.joints !== undefined) {
     if (!isCharacterKind(o.kind as AssetKind) || typeof o.joints !== 'object' || o.joints === null || Array.isArray(o.joints)) return false;
@@ -85,6 +108,38 @@ export function isValidObjectPose(value: unknown): value is Pose {
     const values = pose[key];
     return Array.isArray(values) && values.length === 3 && values.every(n =>
       typeof n === 'number' && Number.isFinite(n) && (key === 'scale' ? n >= 0.01 && n <= 100 : Math.abs(n) <= 10000));
+  });
+}
+
+export const MAX_MODEL_DATA = 4_000_000;
+
+export function isValidImportedModel(value: unknown): value is ImportedModel {
+  if (typeof value !== 'object' || value === null) return false;
+  const model = value as Record<string, unknown>;
+  return typeof model.name === 'string' && model.name.trim().length > 0 && model.name.length <= 60
+    && (model.format === 'glb' || model.format === 'gltf')
+    && typeof model.data === 'string' && model.data.startsWith('data:') && model.data.length <= MAX_MODEL_DATA;
+}
+
+export function isValidWelds(value: unknown, duration: number): value is WeldKey[] {
+  if (!Array.isArray(value) || value.length > 200) return false;
+  const ids = new Set<string>();
+  const times = new Set<number>();
+  return value.every(item => {
+    if (typeof item !== 'object' || item === null) return false;
+    const weld = item as Record<string, unknown>;
+    if (typeof weld.id !== 'string' || weld.id.length === 0 || weld.id.length > 100 || ids.has(weld.id)) return false;
+    if (typeof weld.time !== 'number' || !Number.isFinite(weld.time) || weld.time < 0 || weld.time > duration + 0.01 || times.has(weld.time)) return false;
+    if (weld.targetId === null) {
+      if (weld.offset !== undefined || weld.joint !== undefined) return false;
+    } else {
+      if (typeof weld.targetId !== 'string' || !/^obj_[a-zA-Z0-9_-]{1,100}$/.test(weld.targetId)) return false;
+      if (weld.joint !== undefined && weld.joint !== null && !isJointId(String(weld.joint))) return false;
+      if (!isValidObjectPose(weld.offset)) return false;
+    }
+    ids.add(weld.id);
+    times.add(weld.time);
+    return true;
   });
 }
 
