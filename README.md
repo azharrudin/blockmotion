@@ -52,11 +52,19 @@ Choose `FTP_SERVER_DIR` relative to the FTP account's login directory:
 - Account restricted to `/home/USERNAME/public_html/blockmotion`: use `./`.
 
 The default base URL matches `https://YOUR_DOMAIN/blockmotion/`. Match the FTP
-directory and base URL to the actual document root. The deploy action synchronizes
-built files and tracks them in `.ftp-deploy-sync-state.json`; keep this state file
-on the server. Subsequent deploys can remove previously deployed files that no
-longer exist in `dist/`. Files outside its tracked deployment are left in place;
-`dangerous-clean-slate` is disabled. Use a directory dedicated to this app.
+directory and base URL to the actual document root. The workflow installs `lftp`
+on the GitHub runner and uses `.github/scripts/deploy-ftp.sh` to upload in passive
+IPv4 mode, preferring PASV instead of EPSV to work around connection resets with
+the hosting's ProFTPD server. Transfers run sequentially with bounded retries.
+It uploads assets before `index.html`, keeps existing remote files, and does not
+use `.ftp-deploy-sync-state.json`. Use a directory dedicated to this app.
+
+The previously authorized certificate workaround remains enabled through
+`ssl:verify-certificate no`. FTPS encrypts the connection but does not verify the
+server's identity with this setting. Change it to `yes` after the hosting provider
+repairs the certificate chain. If PASV transfers still fail, ask the hosting
+provider to check the passive port range and firewall; this client change cannot
+open blocked server ports.
 
 Commit and push the workflow and application files after configuring the secrets
 and variables. This workflow uploads built files directly and does not use
@@ -67,8 +75,7 @@ The deployment gate is `npm run build`, which includes TypeScript checks. It doe
 not run `npm test`: the current suite fails the camera object's nonempty geometry
 assertion in `tests/objects.test.mjs`. Restore a test gate after repairing the suite.
 
-See the [FTP deploy action documentation](https://github.com/SamKirkland/FTP-Deploy-Action)
-for supported protocols and settings.
+See the [lftp manual](https://lftp.yar.ru/lftp-man.html) for transfer settings.
 
 ## Deploy with cPanel Git Version Control
 
