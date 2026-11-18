@@ -56,6 +56,10 @@ directory and base URL to the actual document root. The workflow installs `lftp`
 on the GitHub runner and uses `.github/scripts/deploy-ftp.sh` to upload in passive
 IPv4 mode, preferring PASV instead of EPSV to work around connection resets with
 the hosting's ProFTPD server. Transfers run sequentially with bounded retries.
+FTPS is limited to TLS 1.2 as a workaround for the
+[ProFTPD TLS 1.3 data-transfer bug](https://github.com/proftpd/proftpd/issues/2416)
+that can produce `gnutls_record_recv: Error in parsing` with older server OpenSSL
+versions. Both control and data connections remain encrypted when using FTPS.
 It uploads assets before `index.html`, keeps existing remote files, and does not
 use `.ftp-deploy-sync-state.json`. Use a directory dedicated to this app.
 

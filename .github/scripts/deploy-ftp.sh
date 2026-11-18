@@ -43,6 +43,9 @@ set ftp:ssl-force $ftp_tls
 set ftp:ssl-auth TLS
 set ftp:ssl-protect-data yes
 set ftp:ssl-protect-list yes
+# Work around ProFTPD's TLS 1.3 data-transfer incompatibility with older OpenSSL.
+# Keep both control and data connections encrypted using TLS 1.2.
+set ssl:priority "NORMAL:-VERS-SSL3.0:-VERS-TLS1.0:-VERS-TLS1.1:+VERS-TLS1.2:-VERS-TLS1.3"
 # Temporary equivalent of the previously authorized security: loose workaround.
 set ssl:verify-certificate no
 open --user "$FTP_USERNAME" --env-password -p "$FTP_PORT" "$ftp_scheme://$FTP_SERVER"
