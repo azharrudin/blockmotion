@@ -20,53 +20,55 @@ npm run preview
 
 The `dist/` directory can be published as a static site (Netlify, Vercel, GitHub Pages with correct base, etc.). **No backend is required**.
 
-## Deploy with GitHub Actions to cPanel
+## Deploy with GitHub Actions via FTP
 
 `.github/workflows/deploy.yml` typechecks and builds on GitHub using Node.js 22,
-and uploads `dist/` over SSH on every push to `main`. You can also run **Actions →
-Deploy to cPanel → Run workflow** on `main`. The hosting account needs SSH access
-and `rsync`; it does not need Node.js for this workflow.
+then uploads `dist/` via FTP on every push to `main`. You can also run **Actions →
+Deploy via FTP → Run workflow** on `main`. Use the FTP account from **cPanel →
+FTP Accounts**. The hosting account does not need SSH, rsync, or Node.js.
 
 In the GitHub repository, open **Settings → Secrets and variables → Actions**.
 Add these repository **Secrets**:
 
 | Secret | Value |
 | --- | --- |
-| `CPANEL_HOST` | SSH hostname, without `https://` or a path |
-| `CPANEL_USER` | cPanel SSH username |
-| `CPANEL_SSH_KEY` | Complete private key for deployment, without a passphrase |
-| `CPANEL_KNOWN_HOSTS` | Verified SSH host key entries for the host and port |
-
-Authorize the matching public key in **cPanel → SSH Access → Manage SSH Keys**.
-Keep the private key in GitHub Secrets. For `CPANEL_KNOWN_HOSTS`, collect entries
-using `ssh-keyscan -p 22 YOUR_HOST` (substitute the SSH port), compare their
-fingerprints with those supplied by your host, and save the verified entries.
-For a nonstandard port the entries use `[YOUR_HOST]:PORT` as the hostname.
+| `FTP_SERVER` | FTP hostname or IP, without `ftp://` or a path |
+| `FTP_USERNAME` | Full FTP username shown in cPanel, e.g. `deploy@example.com` |
+| `FTP_PASSWORD` | Password for that FTP account |
 
 Add these repository **Variables** in the same settings page:
 
 | Variable | Value |
 | --- | --- |
-| `CPANEL_DEPLOY_PATH` | Required absolute directory, e.g. `/home/USERNAME/public_html/blockmotion` |
-| `CPANEL_SSH_PORT` | Optional; defaults to `22` |
-| `VITE_BASE_PATH` | Optional; defaults to `/blockmotion/`. Use `/` when served at a domain or subdomain root. |
+| `FTP_SERVER_DIR` | Required destination as seen after FTP login, ending in `/` |
+| `FTP_PORT` | Optional; defaults to `21` |
+| `FTP_PROTOCOL` | Optional; defaults to `ftp`. Use `ftps` if the host supports explicit FTP over TLS. |
+| `VITE_BASE_PATH` | Optional; defaults to `/blockmotion/`. Use `/` for a domain or subdomain root. |
 
-The defaults match a site at `https://YOUR_DOMAIN/blockmotion/`. Match the deploy
-directory and base URL to the actual document root. Deployment paths must contain
-only letters, numbers, underscores, dots, slashes, or hyphens, without `..` segments.
-The workflow uploads assets before `index.html` and keeps existing destination
-files, including older hashed assets. It overwrites matching filenames.
+Choose `FTP_SERVER_DIR` relative to the FTP account's login directory:
+
+- Account rooted at `/home/USERNAME`: use `public_html/blockmotion/`.
+- Account rooted at `/home/USERNAME/public_html`: use `blockmotion/`.
+- Account restricted to `/home/USERNAME/public_html/blockmotion`: use `./`.
+
+The default base URL matches `https://YOUR_DOMAIN/blockmotion/`. Match the FTP
+directory and base URL to the actual document root. The deploy action synchronizes
+built files and tracks them in `.ftp-deploy-sync-state.json`; keep this state file
+on the server. Subsequent deploys can remove previously deployed files that no
+longer exist in `dist/`. Files outside its tracked deployment are left in place;
+`dangerous-clean-slate` is disabled. Use a directory dedicated to this app.
 
 Commit and push the workflow and application files after configuring the secrets
-and variables. Use this workflow as an alternative to cPanel's **Deploy HEAD
-Commit**; it uploads built files directly and does not use `.cpanel.yml` or the
-server's Git checkout. Avoid running both deployment methods for the same site.
+and variables. This workflow uploads built files directly and does not use
+`.cpanel.yml` or the server's Git checkout. Avoid running both deployment methods
+for the same site.
 
 The deployment gate is `npm run build`, which includes TypeScript checks. It does
 not run `npm test`: the current suite fails the camera object's nonempty geometry
 assertion in `tests/objects.test.mjs`. Restore a test gate after repairing the suite.
 
-See [GitHub's continuous deployment documentation](https://docs.github.com/en/actions/get-started/continuous-deployment).
+See the [FTP deploy action documentation](https://github.com/SamKirkland/FTP-Deploy-Action)
+for supported protocols and settings.
 
 ## Deploy with cPanel Git Version Control
 
